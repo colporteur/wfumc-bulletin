@@ -1,24 +1,673 @@
+import { useEffect, useState } from 'react';
+import { supabase, withTimeout } from '../../../lib/supabase';
+import LoadingSpinner from '../../../components/LoadingSpinner.jsx';
+
+// =====================================================================
+// Liturgy editor for a single bulletin's Order of Worship.
+//
+// Implemented in this session:
+//   - List items in order, collapsible cards
+//   - Add new item (with type), reorder with ↑/↓, remove
+//   - Star toggle (* "you may stand if able")
+//   - Type-specific fields (hymn, scripture, sermon, etc.)
+//   - Inline body + click-to-expand detail
+//   - One-click "seed default order of worship" for empty bulletins
+//
+// Deferred to follow-up sessions:
+//   - Drag-and-drop reordering (the arrows work for now)
+//   - Claude-assist auto-fill for hymn lyrics, scripture text, etc.
+//   - Sermon manuscript file upload (textarea works in the meantime)
+// =====================================================================
+
+const ITEM_TYPES = [
+  { value: 'generic', label: 'Generic' },
+  { value: 'hymn', label: 'Hymn' },
+  { value: 'music', label: 'Music (instrumental / anthem)' },
+  { value: 'scripture', label: 'Scripture reading' },
+  { value: 'prayer_text', label: 'Prayer / responsive text' },
+  { value: 'responsive_reading', label: 'Responsive reading' },
+  { value: 'communion', label: 'Communion' },
+  { value: 'sermon', label: 'Sermon' },
+  { value: 'giving', label: 'Giving / offering' },
+];
+
+const itemTypeLabel = (t) =>
+  ITEM_TYPES.find((x) => x.value === t)?.label ?? t;
+
+// Standard 24-item Order of Worship to seed an empty bulletin.
+// Pastor Todd can edit / reorder / delete after seeding.
+const DEFAULT_ITEMS = [
+  { item_type: 'music', title: 'Prelude', is_starred: false },
+  { item_type: 'generic', title: 'Lighting of Candles', is_starred: false },
+  { item_type: 'music', title: 'Introit', is_starred: false },
+  { item_type: 'generic', title: 'Greeting', is_starred: false },
+  { item_type: 'responsive_reading', title: 'Call to Worship', is_starred: true },
+  { item_type: 'hymn', title: 'Opening Hymn', is_starred: true },
+  { item_type: 'prayer_text', title: 'Affirmation of Faith', is_starred: true },
+  {
+    item_type: 'hymn',
+    title: 'Gloria Patri',
+    is_starred: true,
+    hymnal_source: 'UMH',
+    hymn_number: '70',
+  },
+  { item_type: 'prayer_text', title: 'Pastoral Prayer', is_starred: false },
+  { item_type: 'prayer_text', title: "The Lord's Prayer", is_starred: false },
+  { item_type: 'music', title: 'Anthem', is_starred: false },
+  { item_type: 'generic', title: "Children's Time", is_starred: false },
+  { item_type: 'scripture', title: 'Scripture Reading', is_starred: false },
+  { item_type: 'hymn', title: 'Hymn of Preparation', is_starred: true },
+  { item_type: 'sermon', title: 'Sermon', is_starred: false },
+  { item_type: 'hymn', title: 'Hymn of Response', is_starred: true },
+  { item_type: 'generic', title: 'Joys & Concerns', is_starred: false },
+  { item_type: 'prayer_text', title: 'Prayers of the People', is_starred: false },
+  {
+    item_type: 'giving',
+    title: 'Giving of Our Tithes and Offerings',
+    is_starred: false,
+  },
+  { item_type: 'music', title: 'Offertory', is_starred: false },
+  {
+    item_type: 'hymn',
+    title: 'Doxology',
+    is_starred: true,
+    hymnal_source: 'UMH',
+    hymn_number: '95',
+  },
+  { item_type: 'hymn', title: 'Closing Hymn', is_starred: true },
+  { item_type: 'generic', title: 'Benediction', is_starred: false },
+  { item_type: 'music', title: 'Postlude', is_starred: false },
+];
+
 export default function LiturgySection({ bulletin }) {
+  const bulletinId = bulletin?.id;
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [items, setItems] = useState([]);
+  const [expandedId, setExpandedId] = useState(null);
+  const [addType, setAddType] = useState('generic');
+  const [seeding, setSeeding] = useState(false);
+
+  const load = async () => {
+    if (!bulletinId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const { data, error: err } = await withTimeout(
+        supabase
+          .from('liturgy_items')
+          .select('*')
+          .eq('bulletin_id', bulletinId)
+          .order('position', { ascending: true })
+      );
+      if (err) throw err;
+      setItems(data ?? []);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bulletinId]);
+
+  const seedDefaults = async () => {
+    if (
+      !window.confirm(
+        'Seed the standard 24-item Order of Worship? You can edit, reorder, or delete any of them after.'
+      )
+    )
+      return;
+    setSeeding(true);
+    setError(null);
+    try {
+      const rows = DEFAULT_ITEMS.map((it, i) => ({
+        ...it,
+        bulletin_id: bulletinId,
+        position: i,
+      }));
+      const { error: err } = await withTimeout(
+        supabase.from('liturgy_items').insert(rows)
+      );
+      if (err) throw err;
+      await load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSeeding(false);
+    }
+  };
+
+  const addItem = async () => {
+    setError(null);
+    try {
+      const nextPos =
+        items.length === 0 ? 0 : Math.max(...items.map((i) => i.position)) + 1;
+      const { data, error: err } = await withTimeout(
+        supabase
+          .from('liturgy_items')
+          .insert({
+            bulletin_id: bulletinId,
+            position: nextPos,
+            item_type: addType,
+            title: '',
+          })
+          .select()
+          .single()
+      );
+      if (err) throw err;
+      setItems((xs) => [...xs, data]);
+      setExpandedId(data.id);
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const updateItem = async (id, patch) => {
+    setError(null);
+    try {
+      const { data, error: err } = await withTimeout(
+        supabase
+          .from('liturgy_items')
+          .update(patch)
+          .eq('id', id)
+          .select()
+          .single()
+      );
+      if (err) throw err;
+      setItems((xs) => xs.map((x) => (x.id === id ? data : x)));
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const removeItem = async (id) => {
+    if (!window.confirm('Remove this item from the order of worship?')) return;
+    setError(null);
+    try {
+      const { error: err } = await withTimeout(
+        supabase.from('liturgy_items').delete().eq('id', id)
+      );
+      if (err) throw err;
+      setItems((xs) => xs.filter((x) => x.id !== id));
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const moveItem = async (id, direction) => {
+    setError(null);
+    const idx = items.findIndex((x) => x.id === id);
+    if (idx < 0) return;
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= items.length) return;
+
+    const a = items[idx];
+    const b = items[swapIdx];
+    try {
+      const temp = -1 - idx;
+      const r1 = await withTimeout(
+        supabase.from('liturgy_items').update({ position: temp }).eq('id', a.id)
+      );
+      if (r1.error) throw r1.error;
+      const r2 = await withTimeout(
+        supabase
+          .from('liturgy_items')
+          .update({ position: a.position })
+          .eq('id', b.id)
+      );
+      if (r2.error) throw r2.error;
+      const r3 = await withTimeout(
+        supabase
+          .from('liturgy_items')
+          .update({ position: b.position })
+          .eq('id', a.id)
+      );
+      if (r3.error) throw r3.error;
+      setItems((xs) => {
+        const next = [...xs];
+        next[idx] = { ...b, position: a.position };
+        next[swapIdx] = { ...a, position: b.position };
+        return next;
+      });
+    } catch (e) {
+      setError(e.message);
+      await load();
+    }
+  };
+
+  if (loading) return <LoadingSpinner />;
+
   return (
     <div className="space-y-4">
       <div>
         <h2 className="font-serif text-xl text-umc-900">Order of Worship</h2>
         <p className="text-sm text-gray-600 mt-1">
-          The full liturgy — each item has a title, optional center text,
-          person/group/hymn #, and an expand-on-tap detail area. Items are
-          reorderable. Hymns, scripture, and the sermon have special fields.
+          The full liturgy. Click any item to expand and edit its details.
+          Items with a <span className="font-semibold">*</span> are "stand if
+          able".
         </p>
       </div>
 
-      <div className="card text-center text-gray-500">
-        <p className="text-sm">
-          Editor coming in a future build session (this is the big one).
+      {error && (
+        <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
+          {error}
         </p>
-        <p className="text-xs mt-2">
-          Will include 21+ default items, drag-reorder, Claude-assist for
-          hymn lyrics and scripture auto-fill, and a dedicated sermon
-          manuscript upload.
+      )}
+
+      {items.length === 0 ? (
+        <div className="card text-center space-y-3">
+          <p className="text-gray-600">
+            This bulletin has no order of worship yet.
+          </p>
+          <button
+            type="button"
+            onClick={seedDefaults}
+            disabled={seeding}
+            className="btn-primary disabled:opacity-50"
+          >
+            {seeding
+              ? 'Seeding…'
+              : 'Seed standard 24-item Order of Worship'}
+          </button>
+          <p className="text-xs text-gray-500">
+            You can edit, reorder, or delete any of them afterward.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {items.map((it, i) => (
+            <LiturgyItemCard
+              key={it.id}
+              item={it}
+              expanded={expandedId === it.id}
+              onToggle={() =>
+                setExpandedId((x) => (x === it.id ? null : it.id))
+              }
+              isFirst={i === 0}
+              isLast={i === items.length - 1}
+              onUpdate={(patch) => updateItem(it.id, patch)}
+              onRemove={() => removeItem(it.id)}
+              onMoveUp={() => moveItem(it.id, 'up')}
+              onMoveDown={() => moveItem(it.id, 'down')}
+            />
+          ))}
+        </div>
+      )}
+
+      {items.length > 0 && (
+        <div className="card flex flex-wrap items-center gap-3">
+          <span className="text-sm text-gray-600">Add item:</span>
+          <select
+            className="text-sm border border-gray-300 rounded px-2 py-1"
+            value={addType}
+            onChange={(e) => setAddType(e.target.value)}
+          >
+            {ITEM_TYPES.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+          <button type="button" onClick={addItem} className="btn-primary">
+            + Add
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Item card
+// ---------------------------------------------------------------------
+
+function LiturgyItemCard({
+  item,
+  expanded,
+  onToggle,
+  isFirst,
+  isLast,
+  onUpdate,
+  onRemove,
+  onMoveUp,
+  onMoveDown,
+}) {
+  return (
+    <div
+      className={`bg-white rounded-lg border ${
+        expanded ? 'border-umc-700' : 'border-gray-200'
+      } shadow-sm`}
+    >
+      {/* Collapsed header — always visible */}
+      <div className="flex items-center gap-2 px-4 py-2">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex-1 flex items-center gap-2 text-left hover:bg-gray-50 -mx-2 px-2 py-1 rounded"
+        >
+          <span className="text-gray-400 text-xs w-4 text-center">
+            {expanded ? '▾' : '▸'}
+          </span>
+          {item.is_starred && (
+            <span className="font-semibold text-umc-700">*</span>
+          )}
+          <span className="font-medium text-gray-800">
+            {item.title || (
+              <span className="italic text-gray-400">untitled</span>
+            )}
+          </span>
+          {item.right_text && (
+            <span className="text-gray-500 text-sm ml-2">
+              — {item.right_text}
+            </span>
+          )}
+          <span className="ml-auto text-xs uppercase tracking-wide text-gray-400">
+            {item.item_type}
+          </span>
+        </button>
+        <div className="flex gap-1 items-center">
+          <button
+            type="button"
+            onClick={onMoveUp}
+            disabled={isFirst}
+            className="text-gray-500 hover:text-gray-800 disabled:opacity-30 disabled:cursor-not-allowed px-1"
+            title="Move up"
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            onClick={onMoveDown}
+            disabled={isLast}
+            className="text-gray-500 hover:text-gray-800 disabled:opacity-30 disabled:cursor-not-allowed px-1"
+            title="Move down"
+          >
+            ↓
+          </button>
+          <button
+            type="button"
+            onClick={onRemove}
+            className="text-xs text-red-600 hover:text-red-800 hover:underline ml-2"
+          >
+            Remove
+          </button>
+        </div>
+      </div>
+
+      {/* Expanded editor */}
+      {expanded && (
+        <div className="border-t border-gray-100 px-4 py-4 space-y-4 bg-gray-50">
+          <CommonFields item={item} onUpdate={onUpdate} />
+          <TypeSpecificFields item={item} onUpdate={onUpdate} />
+          <ExpandableFields item={item} onUpdate={onUpdate} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Common fields — present for every item type
+// ---------------------------------------------------------------------
+
+function CommonFields({ item, onUpdate }) {
+  return (
+    <>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="md:col-span-2">
+          <label className="label">Title (left side)</label>
+          <input
+            type="text"
+            className="input"
+            defaultValue={item.title ?? ''}
+            onBlur={(e) => onUpdate({ title: e.target.value })}
+            placeholder="e.g., Opening Hymn"
+          />
+        </div>
+        <div>
+          <label className="label">Type</label>
+          <select
+            className="input"
+            value={item.item_type}
+            onChange={(e) => onUpdate({ item_type: e.target.value })}
+          >
+            {ITEM_TYPES.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label className="label">Center text (optional)</label>
+          <input
+            type="text"
+            className="input"
+            defaultValue={item.center_text ?? ''}
+            onBlur={(e) =>
+              onUpdate({ center_text: e.target.value || null })
+            }
+            placeholder="Optional middle column"
+          />
+        </div>
+        <div>
+          <label className="label">Right text (person / hymn # / etc.)</label>
+          <input
+            type="text"
+            className="input"
+            defaultValue={item.right_text ?? ''}
+            onBlur={(e) => onUpdate({ right_text: e.target.value || null })}
+            placeholder="e.g., Pastor Todd / UMH 89"
+          />
+        </div>
+      </div>
+
+      <label className="flex items-center gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={!!item.is_starred}
+          onChange={(e) => onUpdate({ is_starred: e.target.checked })}
+          className="h-4 w-4 rounded border-gray-300 text-umc-700"
+        />
+        <span className="text-sm text-gray-700">
+          Star this item (* "you may stand if able")
+        </span>
+      </label>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Type-specific fields
+// ---------------------------------------------------------------------
+
+function TypeSpecificFields({ item, onUpdate }) {
+  switch (item.item_type) {
+    case 'hymn':
+      return <HymnFields item={item} onUpdate={onUpdate} />;
+    case 'scripture':
+      return <ScriptureFields item={item} onUpdate={onUpdate} />;
+    case 'sermon':
+      return <SermonFields item={item} onUpdate={onUpdate} />;
+    default:
+      return null;
+  }
+}
+
+function HymnFields({ item, onUpdate }) {
+  return (
+    <fieldset className="border border-gray-200 rounded-md p-3 bg-white">
+      <legend className="text-xs uppercase tracking-wide text-gray-500 px-1">
+        Hymn details
+      </legend>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-1">
+        <div>
+          <label className="label">Hymnal</label>
+          <select
+            className="input"
+            value={item.hymnal_source ?? ''}
+            onChange={(e) =>
+              onUpdate({ hymnal_source: e.target.value || null })
+            }
+          >
+            <option value="">— none —</option>
+            <option value="UMH">UMH (United Methodist Hymnal)</option>
+            <option value="TFWS">TFWS (The Faith We Sing)</option>
+          </select>
+        </div>
+        <div>
+          <label className="label">Hymn #</label>
+          <input
+            type="text"
+            className="input"
+            defaultValue={item.hymn_number ?? ''}
+            onBlur={(e) =>
+              onUpdate({ hymn_number: e.target.value || null })
+            }
+            placeholder="e.g., 89"
+          />
+        </div>
+        <div>
+          <label className="label">Tune name</label>
+          <input
+            type="text"
+            className="input"
+            defaultValue={item.tune_name ?? ''}
+            onBlur={(e) => onUpdate({ tune_name: e.target.value || null })}
+            placeholder="e.g., NICAEA"
+          />
+        </div>
+        <div className="md:col-span-3">
+          <label className="label">Hymn title</label>
+          <input
+            type="text"
+            className="input"
+            defaultValue={item.hymn_title ?? ''}
+            onBlur={(e) => onUpdate({ hymn_title: e.target.value || null })}
+            placeholder='e.g., "Holy, Holy, Holy"'
+          />
+        </div>
+        <div className="md:col-span-3">
+          <label className="label">Hymn bio / story (optional)</label>
+          <textarea
+            className="input min-h-[60px]"
+            defaultValue={item.hymn_bio ?? ''}
+            onBlur={(e) => onUpdate({ hymn_bio: e.target.value || null })}
+            placeholder="Optional: background on the hymn or composer."
+          />
+        </div>
+      </div>
+      <p className="text-xs text-gray-400 mt-2">
+        Lyrics auto-fill via Claude is coming in a follow-up session.
+      </p>
+    </fieldset>
+  );
+}
+
+function ScriptureFields({ item, onUpdate }) {
+  return (
+    <fieldset className="border border-gray-200 rounded-md p-3 bg-white">
+      <legend className="text-xs uppercase tracking-wide text-gray-500 px-1">
+        Scripture details
+      </legend>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-1">
+        <div>
+          <label className="label">Reference</label>
+          <input
+            type="text"
+            className="input"
+            defaultValue={item.scripture_reference ?? ''}
+            onBlur={(e) =>
+              onUpdate({ scripture_reference: e.target.value || null })
+            }
+            placeholder="e.g., John 3:16-21"
+          />
+        </div>
+        <div>
+          <label className="label">Translation</label>
+          <input
+            type="text"
+            className="input"
+            defaultValue={item.scripture_translation ?? ''}
+            onBlur={(e) =>
+              onUpdate({ scripture_translation: e.target.value || null })
+            }
+            placeholder="e.g., NRSVUe"
+          />
+        </div>
+        <div className="md:col-span-2">
+          <label className="label">Scripture text</label>
+          <textarea
+            className="input min-h-[120px]"
+            defaultValue={item.scripture_text ?? ''}
+            onBlur={(e) =>
+              onUpdate({ scripture_text: e.target.value || null })
+            }
+            placeholder="Paste in or auto-fill via Claude (coming soon)."
+          />
+        </div>
+      </div>
+    </fieldset>
+  );
+}
+
+function SermonFields({ item, onUpdate }) {
+  return (
+    <fieldset className="border border-gray-200 rounded-md p-3 bg-white">
+      <legend className="text-xs uppercase tracking-wide text-gray-500 px-1">
+        Sermon details
+      </legend>
+      <div>
+        <label className="label">Sermon manuscript (text)</label>
+        <textarea
+          className="input min-h-[200px] font-mono text-sm"
+          defaultValue={item.sermon_manuscript_text ?? ''}
+          onBlur={(e) =>
+            onUpdate({ sermon_manuscript_text: e.target.value || null })
+          }
+          placeholder="Paste your sermon manuscript here. Worshippers can expand the sermon item to follow along."
+        />
+        <p className="text-xs text-gray-400 mt-2">
+          File upload (DOCX/PDF parsing) coming in a follow-up session.
         </p>
+      </div>
+    </fieldset>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Expandable inline / detail fields (every type)
+// ---------------------------------------------------------------------
+
+function ExpandableFields({ item, onUpdate }) {
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="label">Inline body (optional)</label>
+        <textarea
+          className="input min-h-[80px]"
+          defaultValue={item.inline_body ?? ''}
+          onBlur={(e) => onUpdate({ inline_body: e.target.value || null })}
+          placeholder="Text shown inline below the title — e.g., a short responsive reading or call to worship."
+        />
+      </div>
+      <div>
+        <label className="label">Expanded detail (optional)</label>
+        <textarea
+          className="input min-h-[80px]"
+          defaultValue={item.expanded_detail ?? ''}
+          onBlur={(e) =>
+            onUpdate({ expanded_detail: e.target.value || null })
+          }
+          placeholder="Hidden by default; worshippers tap to expand. Use for full hymn lyrics, prayer text, etc."
+        />
       </div>
     </div>
   );
