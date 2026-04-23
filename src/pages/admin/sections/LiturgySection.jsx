@@ -620,10 +620,27 @@ function ScriptureFields({ item, onUpdate }) {
 
 function SermonFields({ item, onUpdate }) {
   return (
-    <fieldset className="border border-gray-200 rounded-md p-3 bg-white">
+    <fieldset className="border border-gray-200 rounded-md p-3 bg-white space-y-4">
       <legend className="text-xs uppercase tracking-wide text-gray-500 px-1">
         Sermon details
       </legend>
+      <div>
+        <label className="label">Sermon title</label>
+        <input
+          type="text"
+          className="input"
+          defaultValue={item.sermon_title ?? ''}
+          onBlur={(e) =>
+            onUpdate({ sermon_title: e.target.value || null })
+          }
+          placeholder='e.g., "Walking with Jesus"'
+        />
+        <p className="text-xs text-gray-500 mt-1">
+          The topic/theme of today's sermon. Goes here, NOT in the
+          common "Title" field above (that's the section header,
+          usually just "Sermon").
+        </p>
+      </div>
       <div>
         <label className="label">Sermon manuscript (text)</label>
         <textarea
@@ -634,7 +651,7 @@ function SermonFields({ item, onUpdate }) {
           }
           placeholder="Paste your sermon manuscript here. Worshippers can expand the sermon item to follow along."
         />
-        <p className="text-xs text-gray-400 mt-2">
+        <p className="text-xs text-gray-400 mt-1">
           File upload (DOCX/PDF parsing) coming in a follow-up session.
         </p>
       </div>

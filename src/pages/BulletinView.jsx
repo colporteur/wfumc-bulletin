@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext.jsx';
 
 // =====================================================================
 // Worshipper-facing bulletin display.
@@ -82,10 +84,25 @@ const MONTHS = [
 ];
 
 export default function BulletinView({ data }) {
+  const { isStaff } = useAuth();
+
   if (!data?.bulletin) return <NoPublishedBulletin settings={data?.settings} />;
 
   return (
     <div className="space-y-6">
+      {isStaff && (
+        <div className="no-print bg-umc-50 border border-umc-200 rounded-md px-3 py-2 text-sm flex items-center justify-between">
+          <span className="text-umc-900">
+            You're signed in as staff.
+          </span>
+          <Link
+            to={`/admin/bulletins/${data.bulletin.id}`}
+            className="text-umc-700 underline whitespace-nowrap"
+          >
+            Edit this bulletin →
+          </Link>
+        </div>
+      )}
       <SectionNav />
       <CoverSection settings={data.settings} bulletin={data.bulletin} />
       <WatchLiveButton settings={data.settings} bulletin={data.bulletin} />
@@ -361,6 +378,10 @@ function LiturgyRow({ item, funds, stewEntries, settings }) {
     (item.item_type === 'sermon' && item.sermon_manuscript_text) ||
     (item.item_type === 'giving' && stewEntries.length > 0);
 
+  // Sermon items render their sermon_title as a sub-line under the row title.
+  const sermonSubtitle =
+    item.item_type === 'sermon' ? item.sermon_title : null;
+
   const hymnLabel = (() => {
     if (item.item_type !== 'hymn') return null;
     const parts = [];
@@ -400,6 +421,12 @@ function LiturgyRow({ item, funds, stewEntries, settings }) {
           {item.right_text || hymnLabel}
         </div>
       </button>
+
+      {sermonSubtitle && (
+        <p className="mt-1 ml-5 italic font-serif text-gray-800">
+          "{sermonSubtitle}"
+        </p>
+      )}
 
       {item.inline_body && (
         <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap pl-4 border-l-2 border-gray-200">
@@ -486,6 +513,11 @@ function ScriptureExpand({ item }) {
 function SermonExpand({ item }) {
   return (
     <div className="space-y-2">
+      {item.sermon_title && (
+        <p className="font-serif text-base text-umc-900">
+          "{item.sermon_title}"
+        </p>
+      )}
       {item.sermon_manuscript_text ? (
         <p className="text-gray-800 whitespace-pre-wrap font-serif">
           {item.sermon_manuscript_text}
