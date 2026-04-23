@@ -112,11 +112,14 @@ export default function BulletinList() {
               {bulletins.map((b) => (
                 <tr key={b.id} className="border-b border-gray-100">
                   <td className="px-4 py-3 font-medium">
-                    {new Date(b.service_date).toLocaleDateString('en-US', {
-                      year: 'numeric',
-                      month: 'short',
-                      day: 'numeric',
-                    })}
+                    {new Date(b.service_date + 'T00:00:00').toLocaleDateString(
+                      'en-US',
+                      {
+                        year: 'numeric',
+                        month: 'short',
+                        day: 'numeric',
+                      }
+                    )}
                   </td>
                   <td className="px-4 py-3 text-gray-600">
                     {b.sunday_designation || <span className="text-gray-400">—</span>}

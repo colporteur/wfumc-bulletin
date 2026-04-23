@@ -107,10 +107,16 @@ export default function BulletinEdit() {
   const unpublish = () => update({ status: 'draft', published_at: null });
   const archive = () => update({ status: 'archived' });
 
-  const prettyDate = new Date(bulletin.service_date).toLocaleDateString(
-    'en-US',
-    { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }
-  );
+  // Parse service_date as local time (not UTC) — otherwise YYYY-MM-DD strings
+  // shift by a day depending on timezone.
+  const prettyDate = new Date(
+    bulletin.service_date + 'T00:00:00'
+  ).toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
 
   const ActiveComponent =
     SECTIONS.find((s) => s.key === activeSection)?.Component ?? CoverSection;
