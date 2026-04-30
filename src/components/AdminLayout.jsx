@@ -1,5 +1,6 @@
 import { Outlet, Link, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext.jsx';
+import VersionStamp from './VersionStamp.jsx';
 
 export default function AdminLayout() {
   const { profile, isPastor, signOut } = useAuth();
@@ -53,6 +54,7 @@ export default function AdminLayout() {
         </aside>
         <main className="flex-1 p-4 md:p-6">
           <Outlet />
+          <VersionStamp />
         </main>
       </div>
     </div>

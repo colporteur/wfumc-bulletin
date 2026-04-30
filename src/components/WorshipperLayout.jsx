@@ -1,4 +1,5 @@
 import { Outlet, Link } from 'react-router-dom';
+import VersionStamp from './VersionStamp.jsx';
 
 export default function WorshipperLayout() {
   return (
@@ -25,6 +26,7 @@ export default function WorshipperLayout() {
             Staff
           </Link>
         </p>
+        <VersionStamp />
       </footer>
     </div>
   );
