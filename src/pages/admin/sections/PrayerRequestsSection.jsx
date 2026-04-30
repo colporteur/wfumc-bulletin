@@ -36,6 +36,68 @@ export default function PrayerRequestsSection() {
   const [savingNew, setSavingNew] = useState(false);
   const [showCategories, setShowCategories] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editDraft, setEditDraft] = useState(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const startEdit = (r) => {
+    setEditingId(r.id);
+    setEditDraft({
+      category_id: r.category_id ?? '',
+      is_anonymous: !!r.is_anonymous,
+      submitter_name: r.submitter_name ?? '',
+      praying_for: r.praying_for ?? r.request_text ?? '',
+      situation: r.situation ?? '',
+      removal_mode: r.removal_mode ?? 'auto_4weeks',
+      remove_after_date: r.remove_after_date ?? '',
+    });
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditDraft(null);
+  };
+
+  const saveEdit = async () => {
+    if (!editingId || !editDraft) return;
+    if (!editDraft.praying_for.trim()) {
+      setError('"Praying For" is required.');
+      return;
+    }
+    setSavingEdit(true);
+    setError(null);
+    try {
+      const { data, error: err } = await withTimeout(
+        supabase
+          .from('prayer_requests')
+          .update({
+            category_id: editDraft.category_id || null,
+            is_anonymous: editDraft.is_anonymous,
+            submitter_name: editDraft.is_anonymous
+              ? null
+              : editDraft.submitter_name.trim() || null,
+            praying_for: editDraft.praying_for.trim(),
+            situation: editDraft.situation.trim() || null,
+            removal_mode: editDraft.removal_mode,
+            remove_after_date:
+              editDraft.removal_mode === 'custom_date'
+                ? editDraft.remove_after_date || null
+                : null,
+          })
+          .eq('id', editingId)
+          .select()
+          .single()
+      );
+      if (err) throw err;
+      setRequests((rs) => rs.map((r) => (r.id === editingId ? data : r)));
+      setEditingId(null);
+      setEditDraft(null);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSavingEdit(false);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -360,51 +422,19 @@ export default function PrayerRequestsSection() {
           ) : (
             <ul className="space-y-3">
               {catRequests.map((r) => (
-                <li
+                <PrayerRequestRow
                   key={r.id}
-                  className="flex justify-between items-start gap-3"
-                >
-                  <div className="flex-1">
-                    <div className="text-sm">
-                      <span className="font-medium text-gray-700">
-                        {r.is_anonymous
-                          ? 'Anonymous'
-                          : r.submitter_name || 'Unknown'}
-                      </span>
-                      <span className="text-gray-400 ml-2 text-xs">
-                        {new Date(r.submitted_at).toLocaleDateString('en-US', {
-                          month: 'short',
-                          day: 'numeric',
-                          year: 'numeric',
-                        })}
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-800 mt-1">
-                      <span className="font-medium">
-                        {r.praying_for || r.request_text}
-                      </span>
-                      {r.situation && (
-                        <span className="text-gray-600 italic ml-2">
-                          — {r.situation}
-                        </span>
-                      )}
-                    </p>
-                    <p className="text-xs text-gray-400 mt-1">
-                      {removalModeLabel(r.removal_mode)}
-                      {r.remove_after_date &&
-                        ` (${new Date(
-                          r.remove_after_date + 'T00:00:00'
-                        ).toLocaleDateString()})`}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => removeRequest(r.id)}
-                    className="text-xs text-red-600 hover:text-red-800 hover:underline whitespace-nowrap"
-                  >
-                    Remove
-                  </button>
-                </li>
+                  request={r}
+                  categories={categories}
+                  isEditing={editingId === r.id}
+                  editDraft={editDraft}
+                  setEditDraft={setEditDraft}
+                  savingEdit={savingEdit}
+                  onStartEdit={() => startEdit(r)}
+                  onCancelEdit={cancelEdit}
+                  onSaveEdit={saveEdit}
+                  onRemove={() => removeRequest(r.id)}
+                />
               ))}
             </ul>
           )}
@@ -418,32 +448,19 @@ export default function PrayerRequestsSection() {
           </h3>
           <ul className="space-y-3">
             {orphaned.map((r) => (
-              <li key={r.id} className="flex justify-between items-start gap-3">
-                <div className="flex-1">
-                  <div className="text-sm font-medium text-gray-700">
-                    {r.is_anonymous
-                      ? 'Anonymous'
-                      : r.submitter_name || 'Unknown'}
-                  </div>
-                  <p className="text-sm text-gray-800 mt-1">
-                    <span className="font-medium">
-                      {r.praying_for || r.request_text}
-                    </span>
-                    {r.situation && (
-                      <span className="text-gray-600 italic ml-2">
-                        — {r.situation}
-                      </span>
-                    )}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => removeRequest(r.id)}
-                  className="text-xs text-red-600 hover:text-red-800 hover:underline whitespace-nowrap"
-                >
-                  Remove
-                </button>
-              </li>
+              <PrayerRequestRow
+                key={r.id}
+                request={r}
+                categories={categories}
+                isEditing={editingId === r.id}
+                editDraft={editDraft}
+                setEditDraft={setEditDraft}
+                savingEdit={savingEdit}
+                onStartEdit={() => startEdit(r)}
+                onCancelEdit={cancelEdit}
+                onSaveEdit={saveEdit}
+                onRemove={() => removeRequest(r.id)}
+              />
             ))}
           </ul>
         </div>
@@ -491,5 +508,215 @@ export default function PrayerRequestsSection() {
         )}
       </div>
     </div>
+  );
+}
+
+function PrayerRequestRow({
+  request: r,
+  categories,
+  isEditing,
+  editDraft,
+  setEditDraft,
+  savingEdit,
+  onStartEdit,
+  onCancelEdit,
+  onSaveEdit,
+  onRemove,
+}) {
+  if (!isEditing) {
+    return (
+      <li className="flex justify-between items-start gap-3">
+        <div className="flex-1">
+          <div className="text-sm">
+            <span className="font-medium text-gray-700">
+              {r.is_anonymous ? 'Anonymous' : r.submitter_name || 'Unknown'}
+            </span>
+            <span className="text-gray-400 ml-2 text-xs">
+              {new Date(r.submitted_at).toLocaleDateString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+              })}
+            </span>
+          </div>
+          <p className="text-sm text-gray-800 mt-1">
+            <span className="font-medium">
+              {r.praying_for || r.request_text}
+            </span>
+            {r.situation && (
+              <span className="text-gray-600 italic ml-2">
+                — {r.situation}
+              </span>
+            )}
+          </p>
+          <p className="text-xs text-gray-400 mt-1">
+            {removalModeLabel(r.removal_mode)}
+            {r.remove_after_date &&
+              ` (${new Date(
+                r.remove_after_date + 'T00:00:00'
+              ).toLocaleDateString()})`}
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-1 whitespace-nowrap">
+          <button
+            type="button"
+            onClick={onStartEdit}
+            className="text-xs text-umc-700 hover:text-umc-900 hover:underline"
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={onRemove}
+            className="text-xs text-red-600 hover:text-red-800 hover:underline"
+          >
+            Remove
+          </button>
+        </div>
+      </li>
+    );
+  }
+
+  // Editing mode
+  return (
+    <li className="border border-umc-200 rounded-md p-3 bg-umc-50/50 space-y-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label className="label">Category</label>
+          <select
+            className="input"
+            value={editDraft.category_id}
+            onChange={(e) =>
+              setEditDraft({ ...editDraft, category_id: e.target.value })
+            }
+          >
+            <option value="">— uncategorized —</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="label">Submitter name</label>
+          <input
+            type="text"
+            className="input"
+            value={editDraft.submitter_name}
+            onChange={(e) =>
+              setEditDraft({ ...editDraft, submitter_name: e.target.value })
+            }
+            disabled={editDraft.is_anonymous}
+            placeholder={editDraft.is_anonymous ? 'Anonymous' : ''}
+          />
+          <label className="flex items-center gap-2 mt-1 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={editDraft.is_anonymous}
+              onChange={(e) =>
+                setEditDraft({ ...editDraft, is_anonymous: e.target.checked })
+              }
+              className="h-4 w-4 rounded border-gray-300 text-umc-700"
+            />
+            <span className="text-xs text-gray-600">Anonymous</span>
+          </label>
+        </div>
+      </div>
+
+      <div>
+        <label className="label">
+          Praying For{' '}
+          <span className="text-xs text-gray-400 font-normal">
+            ({editDraft.praying_for.length}/{PRAYER_TEXT_LIMIT})
+          </span>
+        </label>
+        <input
+          type="text"
+          className="input"
+          maxLength={PRAYER_TEXT_LIMIT}
+          value={editDraft.praying_for}
+          onChange={(e) =>
+            setEditDraft({ ...editDraft, praying_for: e.target.value })
+          }
+        />
+      </div>
+
+      <div>
+        <label className="label">
+          Situation{' '}
+          <span className="text-xs text-gray-400 font-normal">
+            (optional, {editDraft.situation.length}/{PRAYER_TEXT_LIMIT})
+          </span>
+        </label>
+        <input
+          type="text"
+          className="input"
+          maxLength={PRAYER_TEXT_LIMIT}
+          value={editDraft.situation}
+          onChange={(e) =>
+            setEditDraft({ ...editDraft, situation: e.target.value })
+          }
+        />
+      </div>
+
+      <div>
+        <label className="label">Removal</label>
+        <select
+          className="input"
+          value={editDraft.removal_mode}
+          onChange={(e) =>
+            setEditDraft({ ...editDraft, removal_mode: e.target.value })
+          }
+        >
+          {REMOVAL_MODES.map((m) => (
+            <option key={m.value} value={m.value}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+        {editDraft.removal_mode === 'custom_date' && (
+          <input
+            type="date"
+            className="input mt-2"
+            value={editDraft.remove_after_date}
+            onChange={(e) =>
+              setEditDraft({
+                ...editDraft,
+                remove_after_date: e.target.value,
+              })
+            }
+          />
+        )}
+      </div>
+
+      <div className="flex gap-2 pt-2 border-t border-gray-100">
+        <button
+          type="button"
+          onClick={onSaveEdit}
+          disabled={savingEdit}
+          className="btn-primary disabled:opacity-50 text-sm"
+        >
+          {savingEdit ? 'Saving…' : 'Save changes'}
+        </button>
+        <button
+          type="button"
+          onClick={onCancelEdit}
+          className="btn-secondary text-sm"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            onCancelEdit();
+            onRemove();
+          }}
+          className="ml-auto text-xs text-red-600 hover:text-red-800 hover:underline"
+        >
+          Remove instead
+        </button>
+      </div>
+    </li>
   );
 }

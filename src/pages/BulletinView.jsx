@@ -888,6 +888,15 @@ function CheckInSection({ bulletin }) {
   );
 }
 
+// Worshipper-friendly labels for removal modes (the admin-facing labels
+// in PrayerRequestsSection.jsx are slightly more clinical).
+const WORSHIPPER_REMOVAL_MODES = [
+  { value: 'auto_4weeks', label: 'About 4 weeks (default)' },
+  { value: 'custom_date', label: 'Until a specific date' },
+  { value: 'staff_discretion', label: "Until I let staff know to remove it" },
+  { value: 'until_contacted', label: 'Until someone from the church contacts me' },
+];
+
 function PrayerSubmitForm({ categories, onSubmitted }) {
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -899,6 +908,8 @@ function PrayerSubmitForm({ categories, onSubmitted }) {
     submitter_name: '',
     praying_for: '',
     situation: '',
+    removal_mode: 'auto_4weeks',
+    remove_after_date: '',
   });
 
   const reset = () =>
@@ -908,6 +919,8 @@ function PrayerSubmitForm({ categories, onSubmitted }) {
       submitter_name: '',
       praying_for: '',
       situation: '',
+      removal_mode: 'auto_4weeks',
+      remove_after_date: '',
     });
 
   const handleSubmit = async (e) => {
@@ -928,7 +941,11 @@ function PrayerSubmitForm({ categories, onSubmitted }) {
             : draft.submitter_name.trim() || null,
           praying_for: draft.praying_for.trim(),
           situation: draft.situation.trim() || null,
-          removal_mode: 'auto_4weeks',
+          removal_mode: draft.removal_mode,
+          remove_after_date:
+            draft.removal_mode === 'custom_date'
+              ? draft.remove_after_date || null
+              : null,
         })
       );
       if (err) throw err;
@@ -1068,6 +1085,34 @@ function PrayerSubmitForm({ categories, onSubmitted }) {
           onChange={(e) => setDraft({ ...draft, situation: e.target.value })}
           placeholder="e.g., recovering from surgery"
         />
+      </div>
+
+      <div>
+        <label className="label">Keep this request on the prayer list</label>
+        <select
+          className="input"
+          value={draft.removal_mode}
+          onChange={(e) =>
+            setDraft({ ...draft, removal_mode: e.target.value })
+          }
+        >
+          {WORSHIPPER_REMOVAL_MODES.map((m) => (
+            <option key={m.value} value={m.value}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+        {draft.removal_mode === 'custom_date' && (
+          <input
+            type="date"
+            className="input mt-2"
+            value={draft.remove_after_date}
+            onChange={(e) =>
+              setDraft({ ...draft, remove_after_date: e.target.value })
+            }
+            required
+          />
+        )}
       </div>
 
       <button
