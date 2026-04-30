@@ -82,7 +82,7 @@ export default function Home() {
           withTimeout(
             supabase
               .from('liturgy_items')
-              .select('*')
+              .select('*, sermon:sermons(*)')
               .eq('bulletin_id', bid)
               .order('position', { ascending: true })
           ),

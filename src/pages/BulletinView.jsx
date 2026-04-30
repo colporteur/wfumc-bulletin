@@ -375,12 +375,12 @@ function LiturgyRow({ item, funds, stewEntries, settings }) {
     !!item.expanded_detail ||
     (item.item_type === 'hymn' && (item.hymn_title || item.hymn_bio)) ||
     (item.item_type === 'scripture' && item.scripture_text) ||
-    (item.item_type === 'sermon' && item.sermon_manuscript_text) ||
+    (item.item_type === 'sermon' && item.sermon?.manuscript_text) ||
     (item.item_type === 'giving' && stewEntries.length > 0);
 
-  // Sermon items render their sermon_title as a sub-line under the row title.
+  // Sermon items render their sermon title as a sub-line under the row title.
   const sermonSubtitle =
-    item.item_type === 'sermon' ? item.sermon_title : null;
+    item.item_type === 'sermon' ? item.sermon?.title : null;
 
   const hymnLabel = (() => {
     if (item.item_type !== 'hymn') return null;
@@ -511,16 +511,18 @@ function ScriptureExpand({ item }) {
 }
 
 function SermonExpand({ item }) {
+  const s = item.sermon;
   return (
     <div className="space-y-2">
-      {item.sermon_title && (
-        <p className="font-serif text-base text-umc-900">
-          "{item.sermon_title}"
-        </p>
+      {s?.title && (
+        <p className="font-serif text-base text-umc-900">"{s.title}"</p>
       )}
-      {item.sermon_manuscript_text ? (
+      {s?.scripture_reference && (
+        <p className="text-xs text-gray-500">{s.scripture_reference}</p>
+      )}
+      {s?.manuscript_text ? (
         <p className="text-gray-800 whitespace-pre-wrap font-serif">
-          {item.sermon_manuscript_text}
+          {s.manuscript_text}
         </p>
       ) : (
         <p className="text-gray-500 italic">Manuscript not yet posted.</p>

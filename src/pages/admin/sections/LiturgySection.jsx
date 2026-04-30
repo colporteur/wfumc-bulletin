@@ -96,7 +96,7 @@ export default function LiturgySection({ bulletin }) {
       const { data, error: err } = await withTimeout(
         supabase
           .from('liturgy_items')
-          .select('*')
+          .select('*, sermon:sermons(*)')
           .eq('bulletin_id', bulletinId)
           .order('position', { ascending: true })
       );
@@ -174,11 +174,54 @@ export default function LiturgySection({ bulletin }) {
           .from('liturgy_items')
           .update(patch)
           .eq('id', id)
-          .select()
+          .select('*, sermon:sermons(*)')
           .single()
       );
       if (err) throw err;
       setItems((xs) => xs.map((x) => (x.id === id ? data : x)));
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  // For sermon items: write goes to the sermons table (not liturgy_items).
+  // If the item doesn't yet have a sermon_id, lazy-create the sermon row
+  // and link it back to the liturgy item.
+  const updateSermonForItem = async (item, patch) => {
+    setError(null);
+    try {
+      if (!item.sermon_id) {
+        const { data: sermon, error: createErr } = await withTimeout(
+          supabase.from('sermons').insert(patch).select().single()
+        );
+        if (createErr) throw createErr;
+
+        const { data: updItem, error: linkErr } = await withTimeout(
+          supabase
+            .from('liturgy_items')
+            .update({ sermon_id: sermon.id })
+            .eq('id', item.id)
+            .select('*, sermon:sermons(*)')
+            .single()
+        );
+        if (linkErr) throw linkErr;
+
+        setItems((xs) => xs.map((x) => (x.id === item.id ? updItem : x)));
+      } else {
+        const { data: sermon, error: updErr } = await withTimeout(
+          supabase
+            .from('sermons')
+            .update(patch)
+            .eq('id', item.sermon_id)
+            .select()
+            .single()
+        );
+        if (updErr) throw updErr;
+
+        setItems((xs) =>
+          xs.map((x) => (x.id === item.id ? { ...x, sermon } : x))
+        );
+      }
     } catch (e) {
       setError(e.message);
     }
@@ -290,6 +333,7 @@ export default function LiturgySection({ bulletin }) {
               isFirst={i === 0}
               isLast={i === items.length - 1}
               onUpdate={(patch) => updateItem(it.id, patch)}
+              onUpdateSermon={(patch) => updateSermonForItem(it, patch)}
               onRemove={() => removeItem(it.id)}
               onMoveUp={() => moveItem(it.id, 'up')}
               onMoveDown={() => moveItem(it.id, 'down')}
@@ -332,6 +376,7 @@ function LiturgyItemCard({
   isFirst,
   isLast,
   onUpdate,
+  onUpdateSermon,
   onRemove,
   onMoveUp,
   onMoveDown,
@@ -402,7 +447,11 @@ function LiturgyItemCard({
       {expanded && (
         <div className="border-t border-gray-100 px-4 py-4 space-y-4 bg-gray-50">
           <CommonFields item={item} onUpdate={onUpdate} />
-          <TypeSpecificFields item={item} onUpdate={onUpdate} />
+          <TypeSpecificFields
+            item={item}
+            onUpdate={onUpdate}
+            onUpdateSermon={onUpdateSermon}
+          />
           <ExpandableFields item={item} onUpdate={onUpdate} />
         </div>
       )}
@@ -488,14 +537,14 @@ function CommonFields({ item, onUpdate }) {
 // Type-specific fields
 // ---------------------------------------------------------------------
 
-function TypeSpecificFields({ item, onUpdate }) {
+function TypeSpecificFields({ item, onUpdate, onUpdateSermon }) {
   switch (item.item_type) {
     case 'hymn':
       return <HymnFields item={item} onUpdate={onUpdate} />;
     case 'scripture':
       return <ScriptureFields item={item} onUpdate={onUpdate} />;
     case 'sermon':
-      return <SermonFields item={item} onUpdate={onUpdate} />;
+      return <SermonFields sermon={item.sermon} onUpdate={onUpdateSermon} />;
     default:
       return null;
   }
@@ -618,7 +667,9 @@ function ScriptureFields({ item, onUpdate }) {
   );
 }
 
-function SermonFields({ item, onUpdate }) {
+function SermonFields({ sermon, onUpdate }) {
+  // sermon may be null until the user types something — the parent
+  // lazy-creates the sermons row on first edit.
   return (
     <fieldset className="border border-gray-200 rounded-md p-3 bg-white space-y-4">
       <legend className="text-xs uppercase tracking-wide text-gray-500 px-1">
@@ -629,10 +680,8 @@ function SermonFields({ item, onUpdate }) {
         <input
           type="text"
           className="input"
-          defaultValue={item.sermon_title ?? ''}
-          onBlur={(e) =>
-            onUpdate({ sermon_title: e.target.value || null })
-          }
+          defaultValue={sermon?.title ?? ''}
+          onBlur={(e) => onUpdate({ title: e.target.value || null })}
           placeholder='e.g., "Walking with Jesus"'
         />
         <p className="text-xs text-gray-500 mt-1">
@@ -645,9 +694,9 @@ function SermonFields({ item, onUpdate }) {
         <label className="label">Sermon manuscript (text)</label>
         <textarea
           className="input min-h-[200px] font-mono text-sm"
-          defaultValue={item.sermon_manuscript_text ?? ''}
+          defaultValue={sermon?.manuscript_text ?? ''}
           onBlur={(e) =>
-            onUpdate({ sermon_manuscript_text: e.target.value || null })
+            onUpdate({ manuscript_text: e.target.value || null })
           }
           placeholder="Paste your sermon manuscript here. Worshippers can expand the sermon item to follow along."
         />
@@ -655,6 +704,34 @@ function SermonFields({ item, onUpdate }) {
           File upload (DOCX/PDF parsing) coming in a follow-up session.
         </p>
       </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label className="label">Scripture reference (optional)</label>
+          <input
+            type="text"
+            className="input"
+            defaultValue={sermon?.scripture_reference ?? ''}
+            onBlur={(e) =>
+              onUpdate({ scripture_reference: e.target.value || null })
+            }
+            placeholder="e.g., John 3:16"
+          />
+        </div>
+        <div>
+          <label className="label">Theme (optional)</label>
+          <input
+            type="text"
+            className="input"
+            defaultValue={sermon?.theme ?? ''}
+            onBlur={(e) => onUpdate({ theme: e.target.value || null })}
+            placeholder="e.g., Easter, Lent, Stewardship"
+          />
+        </div>
+      </div>
+      <p className="text-xs text-gray-400">
+        Sermons are stored separately from the bulletin so they can be
+        archived, searched, or re-preached at a future church.
+      </p>
     </fieldset>
   );
 }
