@@ -1,5 +1,7 @@
 import { Routes, Route } from 'react-router-dom';
 import Home from './pages/Home.jsx';
+import Archive from './pages/Archive.jsx';
+import BulletinPage from './pages/BulletinPage.jsx';
 import InstallHelp from './pages/InstallHelp.jsx';
 import NotFound from './pages/NotFound.jsx';
 import AdminLogin from './pages/admin/Login.jsx';
@@ -17,6 +19,8 @@ export default function App() {
       {/* Worshipper-facing */}
       <Route element={<WorshipperLayout />}>
         <Route path="/" element={<Home />} />
+        <Route path="/archive" element={<Archive />} />
+        <Route path="/b/:date" element={<BulletinPage />} />
         <Route path="/install" element={<InstallHelp />} />
       </Route>
 

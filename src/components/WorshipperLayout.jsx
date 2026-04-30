@@ -9,7 +9,10 @@ export default function WorshipperLayout() {
           <Link to="/" className="font-serif text-lg leading-tight">
             Wedowee First UMC
           </Link>
-          <nav className="text-xs">
+          <nav className="text-xs flex items-center gap-4">
+            <Link to="/archive" className="text-umc-100 hover:text-white">
+              Past bulletins
+            </Link>
             <Link to="/install" className="text-umc-100 hover:text-white">
               Install
             </Link>
