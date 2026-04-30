@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext.jsx';
 import LoadingSpinner from '../../components/LoadingSpinner.jsx';
+import QrCodeCard from '../../components/QrCodeCard.jsx';
 
 export default function AdminDashboard() {
   const { profile } = useAuth();
@@ -64,14 +65,7 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      <div className="card text-sm text-gray-600">
-        <p>
-          <strong>Heads up:</strong> this is the v0.1 scaffold. Section editors
-          (cover, prayer list, liturgy, calendar, financials, etc.) arrive in
-          the next build sessions. For now you can sign in, see the dashboard,
-          create empty bulletins, and edit church Settings.
-        </p>
-      </div>
+      <QrCodeCard />
     </div>
   );
 }
