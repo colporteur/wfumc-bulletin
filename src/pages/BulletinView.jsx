@@ -428,6 +428,18 @@ function LiturgyRow({ item, funds, stewEntries, settings }) {
         </p>
       )}
 
+      {item.item_type === 'giving' && settings?.tithely_url && (
+        <a
+          href={settings.tithely_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="inline-flex items-center gap-1 mt-2 ml-5 text-sm text-umc-700 underline font-medium hover:text-umc-900"
+        >
+          Give online →
+        </a>
+      )}
+
       {item.inline_body && (
         <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap pl-4 border-l-2 border-gray-200">
           {item.inline_body}
