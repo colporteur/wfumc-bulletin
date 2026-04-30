@@ -42,28 +42,78 @@ export default function BulletinList() {
   const createBulletin = async () => {
     setCreating(true);
     setError(null);
-    let data = null;
-    let err = null;
+    let newBulletin = null;
+    let copiedFrom = null;
+
     try {
-      const res = await withTimeout(
+      // 1. Create the new bulletin row
+      const insertRes = await withTimeout(
         supabase
           .from('bulletins')
           .insert({ service_date: nextSundayISO(), status: 'draft' })
           .select()
           .single()
       );
-      data = res.data;
-      err = res.error;
+      if (insertRes.error) throw insertRes.error;
+      newBulletin = insertRes.data;
+
+      // 2. Find the most recent OTHER bulletin to copy the liturgy from.
+      //    (Sermons, stewardship, attendance, etc. are all per-week and
+      //    intentionally NOT carried forward.)
+      const prevRes = await withTimeout(
+        supabase
+          .from('bulletins')
+          .select('id, service_date')
+          .neq('id', newBulletin.id)
+          .order('service_date', { ascending: false })
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      );
+      if (prevRes.error) throw prevRes.error;
+
+      if (prevRes.data) {
+        const itemsRes = await withTimeout(
+          supabase
+            .from('liturgy_items')
+            .select('*')
+            .eq('bulletin_id', prevRes.data.id)
+            .order('position', { ascending: true })
+        );
+        if (itemsRes.error) throw itemsRes.error;
+
+        const copies = (itemsRes.data ?? []).map((it) => {
+          // Strip ids; assign new bulletin_id; clear sermon_id (each
+          // sermon is unique to a week, lazy-created on first edit).
+          // eslint-disable-next-line no-unused-vars
+          const { id, bulletin_id, sermon_id, sermon, ...rest } = it;
+          return {
+            ...rest,
+            bulletin_id: newBulletin.id,
+            sermon_id: null,
+          };
+        });
+
+        if (copies.length > 0) {
+          const copyRes = await withTimeout(
+            supabase.from('liturgy_items').insert(copies)
+          );
+          if (copyRes.error) throw copyRes.error;
+          copiedFrom = prevRes.data.service_date;
+        }
+      }
     } catch (e) {
-      err = e;
+      setError(e.message || String(e));
+    } finally {
+      setCreating(false);
     }
-    setCreating(false);
-    if (err) {
-      setError(err.message);
-      return;
-    }
+
     await load();
-    console.log('Created bulletin', data.id);
+    if (copiedFrom) {
+      console.log(
+        `Created bulletin ${newBulletin?.id} (liturgy copied from ${copiedFrom})`
+      );
+    }
   };
 
   if (!bulletins) return <LoadingSpinner />;
@@ -74,7 +124,9 @@ export default function BulletinList() {
         <div>
           <h1 className="text-2xl font-serif text-umc-900">Bulletins</h1>
           <p className="text-sm text-gray-600 mt-1">
-            One bulletin per Sunday service.
+            One bulletin per Sunday service. New bulletins start with the
+            order of worship copied from your most recent bulletin (sermon,
+            financials, and attendance reset each week).
           </p>
         </div>
         <button
