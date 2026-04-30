@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import { supabase, withTimeout } from '../lib/supabase';
@@ -89,6 +89,19 @@ const MONTHS = [
 
 export default function BulletinView({ data, onPrayerSubmitted }) {
   const { isStaff } = useAuth();
+  // When the user prints, force-expand all liturgy items so hymn lyrics,
+  // scripture text, sermon manuscript, etc. all show up on paper.
+  const [printMode, setPrintMode] = useState(false);
+  useEffect(() => {
+    const onBefore = () => setPrintMode(true);
+    const onAfter = () => setPrintMode(false);
+    window.addEventListener('beforeprint', onBefore);
+    window.addEventListener('afterprint', onAfter);
+    return () => {
+      window.removeEventListener('beforeprint', onBefore);
+      window.removeEventListener('afterprint', onAfter);
+    };
+  }, []);
 
   if (!data?.bulletin) return <NoPublishedBulletin settings={data?.settings} />;
 
@@ -108,6 +121,15 @@ export default function BulletinView({ data, onPrayerSubmitted }) {
         </div>
       )}
       <SectionNav />
+      <div className="no-print flex justify-end">
+        <button
+          type="button"
+          onClick={() => window.print()}
+          className="text-sm text-gray-500 hover:text-umc-700 underline"
+        >
+          🖨️ Print bulletin
+        </button>
+      </div>
       <CoverSection settings={data.settings} bulletin={data.bulletin} />
       <WatchLiveButton settings={data.settings} bulletin={data.bulletin} />
       <WelcomeSection
@@ -123,6 +145,7 @@ export default function BulletinView({ data, onPrayerSubmitted }) {
         funds={data.funds}
         stewEntries={data.stewEntries}
         settings={data.settings}
+        printMode={printMode}
       />
       <PrayerSection
         categories={data.prayerCategories}
@@ -349,12 +372,12 @@ function WelcomeSection({ settings, events, weekly, birthdays }) {
 // ---------------------------------------------------------------------
 // Liturgy / Order of Worship
 // ---------------------------------------------------------------------
-function LiturgySection({ items, bulletin, funds, stewEntries, settings }) {
+function LiturgySection({ items, bulletin, funds, stewEntries, settings, printMode }) {
   if (items.length === 0) return null;
   return (
     <section id="liturgy" className="space-y-3">
       <SectionHeading>Order of Worship</SectionHeading>
-      <p className="text-xs text-gray-500">
+      <p className="text-xs text-gray-500 no-print">
         <span className="font-semibold text-umc-700">*</span> = please stand if
         able. Tap any item with a ▸ to expand.
       </p>
@@ -366,6 +389,7 @@ function LiturgySection({ items, bulletin, funds, stewEntries, settings }) {
             funds={funds}
             stewEntries={stewEntries}
             settings={settings}
+            printMode={printMode}
           />
         ))}
       </div>
@@ -373,8 +397,11 @@ function LiturgySection({ items, bulletin, funds, stewEntries, settings }) {
   );
 }
 
-function LiturgyRow({ item, funds, stewEntries, settings }) {
+function LiturgyRow({ item, funds, stewEntries, settings, printMode }) {
   const [expanded, setExpanded] = useState(false);
+
+  // When printing, force everything expanded so it actually prints.
+  const showExpanded = expanded || !!printMode;
 
   // Decide whether this item has anything to expand
   const hasExpandable =
@@ -397,7 +424,7 @@ function LiturgyRow({ item, funds, stewEntries, settings }) {
   })();
 
   return (
-    <div className="px-4 py-2.5">
+    <div className="px-4 py-2.5 print-keep-together">
       <button
         type="button"
         onClick={() => hasExpandable && setExpanded((v) => !v)}
@@ -407,7 +434,7 @@ function LiturgyRow({ item, funds, stewEntries, settings }) {
       >
         <div className="flex items-baseline gap-1 flex-1 min-w-0">
           {hasExpandable && (
-            <span className="text-gray-400 text-xs w-3">
+            <span className="text-gray-400 text-xs w-3 print-hide-caret">
               {expanded ? '▾' : '▸'}
             </span>
           )}
@@ -452,7 +479,7 @@ function LiturgyRow({ item, funds, stewEntries, settings }) {
         </p>
       )}
 
-      {expanded && hasExpandable && (
+      {showExpanded && hasExpandable && (
         <div className="mt-3 pl-4 border-l-2 border-umc-200 space-y-3 text-sm">
           {item.item_type === 'hymn' && (
             <HymnExpand item={item} settings={settings} />
@@ -668,10 +695,12 @@ function PrayerSection({ categories, requests, onPrayerSubmitted }) {
         })}
       </div>
       {categories.length > 0 && (
-        <PrayerSubmitForm
-          categories={categories}
-          onSubmitted={onPrayerSubmitted}
-        />
+        <div className="no-print">
+          <PrayerSubmitForm
+            categories={categories}
+            onSubmitted={onPrayerSubmitted}
+          />
+        </div>
       )}
     </section>
   );
@@ -732,7 +761,7 @@ function CheckInSection({ bulletin }) {
   };
 
   return (
-    <section id="checkin" className="space-y-3">
+    <section id="checkin" className="space-y-3 no-print">
       <SectionHeading>
         Check In{' '}
         <span className="text-sm font-normal text-gray-500 italic">

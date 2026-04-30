@@ -39,12 +39,80 @@
   }
 }
 
-/* Print stylesheet — used by the print-friendly bulletin view */
+/* =====================================================================
+ * Print stylesheet — what the bulletin looks like on paper.
+ *
+ * Anything tagged .no-print is hidden. The shared/standard chrome
+ * (sticky nav, watch-live button, check-in form, prayer submission
+ * form, drag handles, edit links, etc.) all use that class.
+ *
+ * Liturgy items: when the user prints, we auto-expand all collapsed
+ * content via a React effect (beforeprint listener) so hymn lyrics,
+ * scripture, and sermon manuscripts are visible on paper. The print
+ * rules below also make sure nothing inside an item gets split across
+ * a page if avoidable.
+ * ===================================================================== */
 @media print {
-  .no-print {
+  /* Anything explicitly marked stays out of the printed page */
+  .no-print,
+  .no-print * {
     display: none !important;
   }
+
+  /* Reset the body for paper */
   body {
     @apply text-black;
+    background: #fff !important;
+    margin: 0;
+  }
+
+  /* Page setup: standard letter, narrow-ish margins */
+  @page {
+    size: letter;
+    margin: 0.5in;
+  }
+
+  /* Cards lose their border + shadow for cleaner paper look */
+  .card {
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    background: transparent !important;
+  }
+
+  /* Section breaks: try to keep liturgy items together */
+  .print-keep-together {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Ensure expanded liturgy content shows on paper even if collapsed on screen */
+  .print-show {
+    display: block !important;
+  }
+
+  /* No drag affordances on paper */
+  [data-drag-handle],
+  .cursor-grab,
+  .cursor-grabbing {
+    display: none !important;
+  }
+
+  /* Links: use plain black, no underline ornamentation */
+  a {
+    color: #000 !important;
+    text-decoration: none !important;
+  }
+
+  /* Hide the expand-caret arrow on liturgy rows in print */
+  .print-hide-caret {
+    display: none !important;
+  }
+
+  /* Make headings tighter */
+  h1,
+  h2,
+  h3 {
+    page-break-after: avoid;
   }
 }
