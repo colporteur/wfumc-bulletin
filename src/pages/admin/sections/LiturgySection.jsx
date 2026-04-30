@@ -789,9 +789,30 @@ function HymnFields({ item, onUpdate }) {
             placeholder="e.g., 89"
           />
         </div>
-        <div className="flex items-end">
-          <label className="btn-secondary text-sm w-full text-center cursor-pointer disabled:opacity-50">
-            {analyzing ? 'Reading page…' : '📷 Photo of hymnal page'}
+        <div className="flex items-end gap-2">
+          <label
+            className={`btn-secondary text-sm flex-1 text-center cursor-pointer ${
+              analyzing ? 'opacity-50 pointer-events-none' : ''
+            }`}
+            title="Open the camera to take a fresh photo of the hymnal page"
+          >
+            📷 Camera
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={handleHymnImage}
+              disabled={analyzing}
+            />
+          </label>
+          <label
+            className={`btn-secondary text-sm flex-1 text-center cursor-pointer ${
+              analyzing ? 'opacity-50 pointer-events-none' : ''
+            }`}
+            title="Pick an existing photo from your gallery or files"
+          >
+            🖼️ Gallery
             <input
               ref={fileInputRef}
               type="file"
@@ -802,6 +823,11 @@ function HymnFields({ item, onUpdate }) {
             />
           </label>
         </div>
+        {analyzing && (
+          <div className="md:col-span-3">
+            <p className="text-xs text-gray-500 italic">Reading page…</p>
+          </div>
+        )}
 
         <div className="md:col-span-3">
           <label className="label">Hymn title</label>
@@ -844,11 +870,11 @@ function HymnFields({ item, onUpdate }) {
         <p className="text-xs text-umc-700 mt-2">{fillNote}</p>
       )}
       <p className="text-xs text-gray-400 mt-2">
-        Tap the photo button to take a fresh picture of the hymnal page or
-        pick an existing one from your gallery. Claude reads what's on the
-        page and fills in title, tune, bio, and lyrics (lyrics land in the
-        "Expanded detail" field below). Verify before publishing under your
-        CCLI/OneLicense coverage.
+        <strong>Camera</strong> opens your device's camera for a fresh
+        photo. <strong>Gallery</strong> lets you pick an existing photo or
+        file. Claude reads the page and fills in title, tune, bio, and
+        lyrics (lyrics land in the "Expanded detail" field below). Verify
+        before publishing under your CCLI/OneLicense coverage.
       </p>
     </fieldset>
   );
