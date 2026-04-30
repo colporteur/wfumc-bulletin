@@ -34,6 +34,8 @@ export default function StewardshipSection({ bulletin }) {
   const [leadingAssignments, setLeadingAssignments] = useState({});
   // greetersUshers: single row (or null)
   const [greetersUshers, setGreetersUshers] = useState(null);
+  // checkIns: list of worshipper check-in submissions for this bulletin
+  const [checkIns, setCheckIns] = useState([]);
 
   const load = async () => {
     if (!bulletinId) return;
@@ -48,6 +50,7 @@ export default function StewardshipSection({ bulletin }) {
         attEntRes,
         leadRes,
         greetRes,
+        checkInsRes,
       ] = await Promise.all([
         withTimeout(
           supabase
@@ -95,6 +98,13 @@ export default function StewardshipSection({ bulletin }) {
             .eq('bulletin_id', bulletinId)
             .maybeSingle()
         ),
+        withTimeout(
+          supabase
+            .from('check_ins')
+            .select('*')
+            .eq('bulletin_id', bulletinId)
+            .order('submitted_at', { ascending: false })
+        ),
       ]);
       const errs = [
         fundsRes.error,
@@ -104,6 +114,7 @@ export default function StewardshipSection({ bulletin }) {
         attEntRes.error,
         leadRes.error,
         greetRes.error,
+        checkInsRes.error,
       ].filter(Boolean);
       if (errs.length) throw errs[0];
 
@@ -130,6 +141,7 @@ export default function StewardshipSection({ bulletin }) {
       setLeadingAssignments(leadMap);
 
       setGreetersUshers(greetRes.data ?? null);
+      setCheckIns(checkInsRes.data ?? []);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -473,6 +485,73 @@ export default function StewardshipSection({ bulletin }) {
           defaultValue={greetersUshers?.names_text ?? ''}
           onBlur={(e) => saveGreetersUshers(e.target.value)}
         />
+      </div>
+
+      {/* CHECK-INS */}
+      <div className="card">
+        <h3 className="font-serif text-lg text-umc-900">
+          Worshipper Check-Ins
+          <span className="ml-2 text-sm font-normal text-gray-500">
+            ({checkIns.length})
+          </span>
+        </h3>
+        <p className="text-xs text-gray-500 mt-1">
+          People who tapped "Check in" on this Sunday's bulletin.
+        </p>
+        {checkIns.length === 0 ? (
+          <p className="text-sm text-gray-400 italic mt-3">
+            No check-ins yet for this bulletin.
+          </p>
+        ) : (
+          <ul className="mt-3 divide-y divide-gray-100">
+            {checkIns.map((c) => (
+              <li key={c.id} className="py-2 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <span className="font-medium text-gray-800">
+                      {c.is_anonymous
+                        ? 'Anonymous'
+                        : c.full_name || 'Unnamed'}
+                    </span>
+                    {c.is_visitor && (
+                      <span className="ml-2 inline-block px-2 py-0.5 text-[10px] uppercase tracking-wide rounded bg-umc-50 text-umc-900">
+                        Visitor
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-xs text-gray-500 whitespace-nowrap">
+                    {new Date(c.submitted_at).toLocaleString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: 'numeric',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                </div>
+                {!c.is_anonymous && (c.email || c.phone) && (
+                  <div className="mt-1 text-xs text-gray-500 flex flex-wrap gap-3">
+                    {c.email && (
+                      <a
+                        href={`mailto:${c.email}`}
+                        className="text-umc-700 hover:underline"
+                      >
+                        {c.email}
+                      </a>
+                    )}
+                    {c.phone && (
+                      <a
+                        href={`tel:${c.phone}`}
+                        className="text-umc-700 hover:underline"
+                      >
+                        {c.phone}
+                      </a>
+                    )}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );

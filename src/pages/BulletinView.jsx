@@ -87,7 +87,7 @@ const MONTHS = [
   'December',
 ];
 
-export default function BulletinView({ data }) {
+export default function BulletinView({ data, onPrayerSubmitted }) {
   const { isStaff } = useAuth();
 
   if (!data?.bulletin) return <NoPublishedBulletin settings={data?.settings} />;
@@ -127,6 +127,7 @@ export default function BulletinView({ data }) {
       <PrayerSection
         categories={data.prayerCategories}
         requests={data.prayerRequests}
+        onPrayerSubmitted={onPrayerSubmitted}
       />
       <StewardshipSection
         funds={data.funds}
@@ -634,7 +635,7 @@ function GivingExpand({ funds, entries, settings }) {
 // ---------------------------------------------------------------------
 // Prayer Requests
 // ---------------------------------------------------------------------
-function PrayerSection({ categories, requests }) {
+function PrayerSection({ categories, requests, onPrayerSubmitted }) {
   if (categories.length === 0 && requests.length === 0) return null;
   return (
     <section id="prayer" className="space-y-3">
@@ -666,7 +667,12 @@ function PrayerSection({ categories, requests }) {
           );
         })}
       </div>
-      {categories.length > 0 && <PrayerSubmitForm categories={categories} />}
+      {categories.length > 0 && (
+        <PrayerSubmitForm
+          categories={categories}
+          onSubmitted={onPrayerSubmitted}
+        />
+      )}
     </section>
   );
 }
@@ -882,7 +888,7 @@ function CheckInSection({ bulletin }) {
   );
 }
 
-function PrayerSubmitForm({ categories }) {
+function PrayerSubmitForm({ categories, onSubmitted }) {
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -928,6 +934,9 @@ function PrayerSubmitForm({ categories }) {
       if (err) throw err;
       setSubmitted(true);
       reset();
+      // Refresh the visible prayer list so the new request shows up
+      // immediately without making the worshipper reload.
+      if (onSubmitted) onSubmitted();
     } catch (e2) {
       setError(e2.message || String(e2));
     } finally {

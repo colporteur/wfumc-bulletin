@@ -242,6 +242,24 @@ export default function Home() {
     };
   }, []);
 
+  // Lightweight refresher used after worshippers submit a prayer request,
+  // so the new request shows up in the visible list without a full reload.
+  const refreshPrayerRequests = async () => {
+    try {
+      const { data: reqs, error: err } = await withTimeout(
+        supabase
+          .from('prayer_requests')
+          .select('*')
+          .eq('is_active', true)
+          .order('submitted_at', { ascending: false })
+      );
+      if (err) return;
+      setData((d) => (d ? { ...d, prayerRequests: reqs ?? [] } : d));
+    } catch {
+      // Best-effort — if it fails we just don't refresh; user can reload.
+    }
+  };
+
   if (loading) return <LoadingSpinner label="Loading bulletin..." />;
   if (error) {
     return (
@@ -261,5 +279,10 @@ export default function Home() {
     );
   }
 
-  return <BulletinView data={data} />;
+  return (
+    <BulletinView
+      data={data}
+      onPrayerSubmitted={refreshPrayerRequests}
+    />
+  );
 }
