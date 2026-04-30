@@ -16,13 +16,21 @@ export default function ProtectedRoute({ children, requirePastor = false }) {
 
   if (!isStaff) {
     return (
-      <div className="max-w-lg mx-auto mt-12 p-6 text-center">
-        <h1 className="text-xl font-semibold mb-2">No staff profile</h1>
+      <div className="max-w-lg mx-auto mt-12 p-6 text-center space-y-4">
+        <h1 className="text-xl font-semibold">No staff profile</h1>
         <p className="text-gray-600 text-sm">
-          You're signed in, but you don't have a staff profile yet. Ask Pastor
-          Todd to add you, or follow the SETUP.md instructions to give yourself
-          one.
+          You're signed in, but no staff profile is loaded for this user. This
+          usually clears up with a reload — the profile briefly didn't come
+          back from the server. If reloading doesn't work, ask Pastor Todd to
+          confirm your account.
         </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="btn-primary"
+        >
+          Reload
+        </button>
       </div>
     );
   }

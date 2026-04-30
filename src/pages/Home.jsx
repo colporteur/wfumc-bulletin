@@ -245,9 +245,19 @@ export default function Home() {
   if (loading) return <LoadingSpinner label="Loading bulletin..." />;
   if (error) {
     return (
-      <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
-        Couldn't load the bulletin: {error}
-      </p>
+      <div className="card text-center space-y-3">
+        <p className="text-sm text-red-700">
+          Couldn't load the bulletin.
+        </p>
+        <p className="text-xs text-gray-500">{error}</p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="btn-primary"
+        >
+          Try again
+        </button>
+      </div>
     );
   }
 
