@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { supabase, withTimeout } from '../../../lib/supabase';
+import { supabase, withTimeout, callClaude } from '../../../lib/supabase';
 import LoadingSpinner from '../../../components/LoadingSpinner.jsx';
 
 // =====================================================================
@@ -551,6 +551,78 @@ function TypeSpecificFields({ item, onUpdate, onUpdateSermon }) {
 }
 
 function HymnFields({ item, onUpdate }) {
+  const [filling, setFilling] = useState(false);
+  const [fillError, setFillError] = useState(null);
+  // Local mirrors so Claude-fill updates render without round-tripping props
+  const [hymnTitle, setHymnTitle] = useState(item.hymn_title ?? '');
+  const [tuneName, setTuneName] = useState(item.tune_name ?? '');
+  const [hymnBio, setHymnBio] = useState(item.hymn_bio ?? '');
+
+  const autoFill = async () => {
+    if (!item.hymnal_source || !item.hymn_number?.trim()) {
+      setFillError('Choose a hymnal and enter a hymn number first.');
+      return;
+    }
+    setFilling(true);
+    setFillError(null);
+    try {
+      const result = await callClaude({
+        system:
+          'You are helping prepare a church bulletin. Look up a hymn from the United Methodist Hymnal (UMH) or The Faith We Sing (TFWS) by its number and return ONLY a JSON object — no markdown code fences, no preamble, no commentary. Schema: { "title": string, "tune_name": string, "author": string, "year": string, "bio": string }. The "bio" should be 1–2 sentences about the hymn or composer. If you don\'t know the hymn with confidence, return all-empty strings. Never fabricate.',
+        messages: [
+          {
+            role: 'user',
+            content: `Look up ${item.hymnal_source} #${item.hymn_number}.`,
+          },
+        ],
+        max_tokens: 500,
+      });
+      const text = result?.content?.[0]?.text?.trim();
+      if (!text) throw new Error('Claude returned no text.');
+
+      // Strip markdown code fences if Claude wrapped them despite the system prompt
+      let jsonStr = text;
+      const m = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (m) jsonStr = m[1].trim();
+
+      let data;
+      try {
+        data = JSON.parse(jsonStr);
+      } catch {
+        throw new Error('Claude returned invalid JSON. Try again or fill manually.');
+      }
+
+      const updates = {};
+      if (data.title) {
+        updates.hymn_title = data.title;
+        setHymnTitle(data.title);
+      }
+      if (data.tune_name) {
+        updates.tune_name = data.tune_name;
+        setTuneName(data.tune_name);
+      }
+      const bioParts = [];
+      if (data.author) bioParts.push(`Composed by ${data.author}`);
+      if (data.year) bioParts.push(`(${data.year})`);
+      if (data.bio) bioParts.push(data.bio);
+      const bio = bioParts.join(' ').trim();
+      if (bio) {
+        updates.hymn_bio = bio;
+        setHymnBio(bio);
+      }
+
+      if (Object.keys(updates).length === 0) {
+        setFillError("Claude doesn't recognize that hymn — please fill manually.");
+      } else {
+        onUpdate(updates);
+      }
+    } catch (e) {
+      setFillError(e.message || String(e));
+    } finally {
+      setFilling(false);
+    }
+  };
+
   return (
     <fieldset className="border border-gray-200 rounded-md p-3 bg-white">
       <legend className="text-xs uppercase tracking-wide text-gray-500 px-1">
@@ -583,44 +655,101 @@ function HymnFields({ item, onUpdate }) {
             placeholder="e.g., 89"
           />
         </div>
-        <div>
-          <label className="label">Tune name</label>
-          <input
-            type="text"
-            className="input"
-            defaultValue={item.tune_name ?? ''}
-            onBlur={(e) => onUpdate({ tune_name: e.target.value || null })}
-            placeholder="e.g., NICAEA"
-          />
+        <div className="flex items-end">
+          <button
+            type="button"
+            onClick={autoFill}
+            disabled={
+              filling || !item.hymnal_source || !item.hymn_number
+            }
+            className="btn-secondary text-sm w-full disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {filling ? 'Asking Claude…' : '✨ Look up'}
+          </button>
         </div>
         <div className="md:col-span-3">
           <label className="label">Hymn title</label>
           <input
             type="text"
             className="input"
-            defaultValue={item.hymn_title ?? ''}
+            value={hymnTitle}
+            onChange={(e) => setHymnTitle(e.target.value)}
             onBlur={(e) => onUpdate({ hymn_title: e.target.value || null })}
             placeholder='e.g., "Holy, Holy, Holy"'
+          />
+        </div>
+        <div>
+          <label className="label">Tune name</label>
+          <input
+            type="text"
+            className="input"
+            value={tuneName}
+            onChange={(e) => setTuneName(e.target.value)}
+            onBlur={(e) => onUpdate({ tune_name: e.target.value || null })}
+            placeholder="e.g., NICAEA"
           />
         </div>
         <div className="md:col-span-3">
           <label className="label">Hymn bio / story (optional)</label>
           <textarea
             className="input min-h-[60px]"
-            defaultValue={item.hymn_bio ?? ''}
+            value={hymnBio}
+            onChange={(e) => setHymnBio(e.target.value)}
             onBlur={(e) => onUpdate({ hymn_bio: e.target.value || null })}
             placeholder="Optional: background on the hymn or composer."
           />
         </div>
       </div>
+      {fillError && (
+        <p className="text-xs text-red-600 mt-2">{fillError}</p>
+      )}
       <p className="text-xs text-gray-400 mt-2">
-        Lyrics auto-fill via Claude is coming in a follow-up session.
+        Auto-fill returns title / tune / brief bio. Claude does not return
+        copyrighted lyrics — those still need to be added manually under
+        your CCLI/OneLicense coverage.
       </p>
     </fieldset>
   );
 }
 
 function ScriptureFields({ item, onUpdate }) {
+  const [filling, setFilling] = useState(false);
+  const [fillError, setFillError] = useState(null);
+  // Local mirror so we can show fresh text after Claude fills it without
+  // forcing the parent to rerender every keystroke.
+  const [textValue, setTextValue] = useState(item.scripture_text ?? '');
+
+  const autoFill = async () => {
+    if (!item.scripture_reference?.trim()) {
+      setFillError('Enter a scripture reference first.');
+      return;
+    }
+    setFilling(true);
+    setFillError(null);
+    try {
+      const translation = item.scripture_translation?.trim() || 'NRSVUe';
+      const result = await callClaude({
+        system:
+          'You are helping prepare a church bulletin. When asked for a scripture passage, return ONLY the verses (no introduction, no commentary, no copyright notice). Format each verse with its number in superscript-style brackets at the start, like "[1] In the beginning..." Use plain text only — no markdown.',
+        messages: [
+          {
+            role: 'user',
+            content: `Please provide ${item.scripture_reference} in the ${translation} translation.`,
+          },
+        ],
+        max_tokens: 2000,
+      });
+      const text = result?.content?.[0]?.text?.trim();
+      if (!text) throw new Error('Claude returned no text.');
+      setTextValue(text);
+      onUpdate({ scripture_text: text });
+    } catch (e) {
+      setFillError(e.message || String(e));
+    } finally {
+      setFilling(false);
+    }
+  };
+
   return (
     <fieldset className="border border-gray-200 rounded-md p-3 bg-white">
       <legend className="text-xs uppercase tracking-wide text-gray-500 px-1">
@@ -652,15 +781,29 @@ function ScriptureFields({ item, onUpdate }) {
           />
         </div>
         <div className="md:col-span-2">
-          <label className="label">Scripture text</label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="label mb-0">Scripture text</label>
+            <button
+              type="button"
+              onClick={autoFill}
+              disabled={filling || !item.scripture_reference}
+              className="text-xs text-umc-700 hover:text-umc-900 underline disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              {filling ? 'Asking Claude…' : '✨ Auto-fill from Claude'}
+            </button>
+          </div>
           <textarea
             className="input min-h-[120px]"
-            defaultValue={item.scripture_text ?? ''}
+            value={textValue}
+            onChange={(e) => setTextValue(e.target.value)}
             onBlur={(e) =>
               onUpdate({ scripture_text: e.target.value || null })
             }
-            placeholder="Paste in or auto-fill via Claude (coming soon)."
+            placeholder="Paste in, type, or click the Claude button above to auto-fill."
           />
+          {fillError && (
+            <p className="text-xs text-red-600 mt-1">{fillError}</p>
+          )}
         </div>
       </div>
     </fieldset>
