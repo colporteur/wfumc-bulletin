@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase, withTimeout, callClaude } from '../../../lib/supabase';
-import { downsizeImage, blobToBase64 } from '../../../lib/imageHelpers';
+import { prepareImageForUpload, blobToBase64 } from '../../../lib/imageHelpers';
 import LoadingSpinner from '../../../components/LoadingSpinner.jsx';
 
 // =====================================================================
@@ -632,8 +632,9 @@ function HymnFields({ item, onUpdate }) {
     setFillNote(null);
 
     try {
-      // Downscale + base64 encode
-      const blob = await downsizeImage(file, 1600, 0.85);
+      // Prepare image (downsizes via canvas if possible, else falls back
+      // to original file with the correct media type).
+      const { blob, mediaType } = await prepareImageForUpload(file, 1600, 0.85);
       const base64 = await blobToBase64(blob);
 
       const hymnalContext = item.hymnal_source
@@ -658,7 +659,7 @@ function HymnFields({ item, onUpdate }) {
                 type: 'image',
                 source: {
                   type: 'base64',
-                  media_type: 'image/jpeg',
+                  media_type: mediaType,
                   data: base64,
                 },
               },
