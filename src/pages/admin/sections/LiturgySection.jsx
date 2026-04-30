@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { supabase, withTimeout, callClaude } from '../../../lib/supabase';
 import { prepareImageForUpload, blobToBase64 } from '../../../lib/imageHelpers';
 import LoadingSpinner from '../../../components/LoadingSpinner.jsx';
+import SortableList, { DragHandle } from '../../../components/SortableList.jsx';
 
 // =====================================================================
 // Liturgy editor for a single bulletin's Order of Worship.
@@ -242,41 +243,43 @@ export default function LiturgySection({ bulletin }) {
     }
   };
 
-  const moveItem = async (id, direction) => {
+  // Reorder all items based on a new array of IDs. Persists by parking
+  // every row at a temporary negative position first (to avoid the
+  // unique (bulletin_id, position) constraint biting mid-update), then
+  // assigns each row its new 0..N-1 index.
+  const reorderItems = async (newOrderedIds) => {
     setError(null);
-    const idx = items.findIndex((x) => x.id === id);
-    if (idx < 0) return;
-    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
-    if (swapIdx < 0 || swapIdx >= items.length) return;
+    const oldItems = items;
+    const newItems = newOrderedIds
+      .map((id) => oldItems.find((x) => x.id === id))
+      .filter(Boolean);
 
-    const a = items[idx];
-    const b = items[swapIdx];
+    // Optimistically update local state
+    setItems(newItems.map((it, i) => ({ ...it, position: i })));
+
     try {
-      const temp = -1 - idx;
-      const r1 = await withTimeout(
-        supabase.from('liturgy_items').update({ position: temp }).eq('id', a.id)
+      // Park everyone at temp negative positions to clear the unique constraint
+      await Promise.all(
+        oldItems.map((it, i) =>
+          withTimeout(
+            supabase
+              .from('liturgy_items')
+              .update({ position: -1 - i })
+              .eq('id', it.id)
+          )
+        )
       );
-      if (r1.error) throw r1.error;
-      const r2 = await withTimeout(
-        supabase
-          .from('liturgy_items')
-          .update({ position: a.position })
-          .eq('id', b.id)
+      // Now assign final positions in the new order
+      await Promise.all(
+        newItems.map((it, i) =>
+          withTimeout(
+            supabase
+              .from('liturgy_items')
+              .update({ position: i })
+              .eq('id', it.id)
+          )
+        )
       );
-      if (r2.error) throw r2.error;
-      const r3 = await withTimeout(
-        supabase
-          .from('liturgy_items')
-          .update({ position: b.position })
-          .eq('id', a.id)
-      );
-      if (r3.error) throw r3.error;
-      setItems((xs) => {
-        const next = [...xs];
-        next[idx] = { ...b, position: a.position };
-        next[swapIdx] = { ...a, position: b.position };
-        return next;
-      });
     } catch (e) {
       setError(e.message);
       await load();
@@ -291,6 +294,7 @@ export default function LiturgySection({ bulletin }) {
         <h2 className="font-serif text-xl text-umc-900">Order of Worship</h2>
         <p className="text-sm text-gray-600 mt-1">
           The full liturgy. Click any item to expand and edit its details.
+          Drag the <span className="font-mono">⋮⋮</span> handle to reorder.
           Items with a <span className="font-semibold">*</span> are "stand if
           able".
         </p>
@@ -323,23 +327,23 @@ export default function LiturgySection({ bulletin }) {
         </div>
       ) : (
         <div className="space-y-2">
-          {items.map((it, i) => (
-            <LiturgyItemCard
-              key={it.id}
-              item={it}
-              expanded={expandedId === it.id}
-              onToggle={() =>
-                setExpandedId((x) => (x === it.id ? null : it.id))
-              }
-              isFirst={i === 0}
-              isLast={i === items.length - 1}
-              onUpdate={(patch) => updateItem(it.id, patch)}
-              onUpdateSermon={(patch) => updateSermonForItem(it, patch)}
-              onRemove={() => removeItem(it.id)}
-              onMoveUp={() => moveItem(it.id, 'up')}
-              onMoveDown={() => moveItem(it.id, 'down')}
-            />
-          ))}
+          <SortableList
+            items={items}
+            onReorder={reorderItems}
+            renderItem={(it, handleProps) => (
+              <LiturgyItemCard
+                item={it}
+                expanded={expandedId === it.id}
+                onToggle={() =>
+                  setExpandedId((x) => (x === it.id ? null : it.id))
+                }
+                onUpdate={(patch) => updateItem(it.id, patch)}
+                onUpdateSermon={(patch) => updateSermonForItem(it, patch)}
+                onRemove={() => removeItem(it.id)}
+                dragHandleProps={handleProps}
+              />
+            )}
+          />
         </div>
       )}
 
@@ -374,13 +378,10 @@ function LiturgyItemCard({
   item,
   expanded,
   onToggle,
-  isFirst,
-  isLast,
   onUpdate,
   onUpdateSermon,
   onRemove,
-  onMoveUp,
-  onMoveDown,
+  dragHandleProps,
 }) {
   return (
     <div
@@ -389,11 +390,12 @@ function LiturgyItemCard({
       } shadow-sm`}
     >
       {/* Collapsed header — always visible */}
-      <div className="flex items-center gap-2 px-4 py-2">
+      <div className="flex items-center gap-1 px-2 py-2">
+        <DragHandle handleProps={dragHandleProps} label="Drag to reorder" />
         <button
           type="button"
           onClick={onToggle}
-          className="flex-1 flex items-center gap-2 text-left hover:bg-gray-50 -mx-2 px-2 py-1 rounded"
+          className="flex-1 flex items-center gap-2 text-left hover:bg-gray-50 -mx-1 px-2 py-1 rounded min-w-0"
         >
           <span className="text-gray-400 text-xs w-4 text-center">
             {expanded ? '▾' : '▸'}
@@ -401,47 +403,27 @@ function LiturgyItemCard({
           {item.is_starred && (
             <span className="font-semibold text-umc-700">*</span>
           )}
-          <span className="font-medium text-gray-800">
+          <span className="font-medium text-gray-800 truncate">
             {item.title || (
               <span className="italic text-gray-400">untitled</span>
             )}
           </span>
           {item.right_text && (
-            <span className="text-gray-500 text-sm ml-2">
+            <span className="text-gray-500 text-sm ml-2 truncate">
               — {item.right_text}
             </span>
           )}
-          <span className="ml-auto text-xs uppercase tracking-wide text-gray-400">
+          <span className="ml-auto text-xs uppercase tracking-wide text-gray-400 whitespace-nowrap">
             {item.item_type}
           </span>
         </button>
-        <div className="flex gap-1 items-center">
-          <button
-            type="button"
-            onClick={onMoveUp}
-            disabled={isFirst}
-            className="text-gray-500 hover:text-gray-800 disabled:opacity-30 disabled:cursor-not-allowed px-1"
-            title="Move up"
-          >
-            ↑
-          </button>
-          <button
-            type="button"
-            onClick={onMoveDown}
-            disabled={isLast}
-            className="text-gray-500 hover:text-gray-800 disabled:opacity-30 disabled:cursor-not-allowed px-1"
-            title="Move down"
-          >
-            ↓
-          </button>
-          <button
-            type="button"
-            onClick={onRemove}
-            className="text-xs text-red-600 hover:text-red-800 hover:underline ml-2"
-          >
-            Remove
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={onRemove}
+          className="text-xs text-red-600 hover:text-red-800 hover:underline px-2 whitespace-nowrap"
+        >
+          Remove
+        </button>
       </div>
 
       {/* Expanded editor */}

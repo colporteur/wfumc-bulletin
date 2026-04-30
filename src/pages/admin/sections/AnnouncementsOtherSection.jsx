@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase, withTimeout } from '../../../lib/supabase';
 import LoadingSpinner from '../../../components/LoadingSpinner.jsx';
+import SortableList, { DragHandle } from '../../../components/SortableList.jsx';
 
 const OTHER_BLOCK_TYPES = [
   { value: 'heading_body', label: 'Heading + body' },
@@ -183,40 +184,28 @@ export default function AnnouncementsOtherSection({ bulletin }) {
     }
   };
 
-  const moveOtherBlock = async (id, direction) => {
+  const reorderOtherBlocks = async (newOrderedIds) => {
     setError(null);
-    const idx = otherBlocks.findIndex((b) => b.id === id);
-    if (idx < 0) return;
-    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
-    if (swapIdx < 0 || swapIdx >= otherBlocks.length) return;
-    const a = otherBlocks[idx];
-    const b = otherBlocks[swapIdx];
+    const oldBlocks = otherBlocks;
+    const newBlocks = newOrderedIds
+      .map((id) => oldBlocks.find((b) => b.id === id))
+      .filter(Boolean);
+    setOtherBlocks(newBlocks.map((b, i) => ({ ...b, position: i })));
     try {
-      const temp = -1 - idx;
-      const r1 = await withTimeout(
-        supabase.from('other_blocks').update({ position: temp }).eq('id', a.id)
+      await Promise.all(
+        oldBlocks.map((b, i) =>
+          withTimeout(
+            supabase.from('other_blocks').update({ position: -1 - i }).eq('id', b.id)
+          )
+        )
       );
-      if (r1.error) throw r1.error;
-      const r2 = await withTimeout(
-        supabase
-          .from('other_blocks')
-          .update({ position: a.position })
-          .eq('id', b.id)
+      await Promise.all(
+        newBlocks.map((b, i) =>
+          withTimeout(
+            supabase.from('other_blocks').update({ position: i }).eq('id', b.id)
+          )
+        )
       );
-      if (r2.error) throw r2.error;
-      const r3 = await withTimeout(
-        supabase
-          .from('other_blocks')
-          .update({ position: b.position })
-          .eq('id', a.id)
-      );
-      if (r3.error) throw r3.error;
-      setOtherBlocks((bs) => {
-        const next = [...bs];
-        next[idx] = { ...b, position: a.position };
-        next[swapIdx] = { ...a, position: b.position };
-        return next;
-      });
     } catch (e) {
       setError(e.message);
       await load();
@@ -317,64 +306,39 @@ export default function AnnouncementsOtherSection({ bulletin }) {
         </span>
       </div>
 
-      {otherBlocks.map((b, i) => (
-        <OtherBlockCard
-          key={b.id}
-          block={b}
-          isFirst={i === 0}
-          isLast={i === otherBlocks.length - 1}
-          onUpdate={(patch) => updateOtherBlock(b.id, patch)}
-          onRemove={() => removeOtherBlock(b.id)}
-          onMoveUp={() => moveOtherBlock(b.id, 'up')}
-          onMoveDown={() => moveOtherBlock(b.id, 'down')}
-        />
-      ))}
+      <SortableList
+        items={otherBlocks}
+        onReorder={reorderOtherBlocks}
+        renderItem={(b, handleProps) => (
+          <OtherBlockCard
+            block={b}
+            onUpdate={(patch) => updateOtherBlock(b.id, patch)}
+            onRemove={() => removeOtherBlock(b.id)}
+            dragHandleProps={handleProps}
+          />
+        )}
+      />
     </div>
   );
 }
 
-function OtherBlockCard({
-  block,
-  isFirst,
-  isLast,
-  onUpdate,
-  onRemove,
-  onMoveUp,
-  onMoveDown,
-}) {
+function OtherBlockCard({ block, onUpdate, onRemove, dragHandleProps }) {
   return (
     <div className="card space-y-3">
       <div className="flex items-center justify-between border-b border-gray-100 pb-2">
-        <span className="text-xs uppercase tracking-wide text-gray-500">
-          {otherTypeLabel(block.block_type)}
-        </span>
-        <div className="flex gap-1">
-          <button
-            type="button"
-            onClick={onMoveUp}
-            disabled={isFirst}
-            className="text-gray-500 hover:text-gray-800 disabled:opacity-30 disabled:cursor-not-allowed px-2"
-            title="Move up"
-          >
-            ↑
-          </button>
-          <button
-            type="button"
-            onClick={onMoveDown}
-            disabled={isLast}
-            className="text-gray-500 hover:text-gray-800 disabled:opacity-30 disabled:cursor-not-allowed px-2"
-            title="Move down"
-          >
-            ↓
-          </button>
-          <button
-            type="button"
-            onClick={onRemove}
-            className="text-xs text-red-600 hover:text-red-800 hover:underline ml-2"
-          >
-            Remove
-          </button>
+        <div className="flex items-center gap-1">
+          <DragHandle handleProps={dragHandleProps} />
+          <span className="text-xs uppercase tracking-wide text-gray-500">
+            {otherTypeLabel(block.block_type)}
+          </span>
         </div>
+        <button
+          type="button"
+          onClick={onRemove}
+          className="text-xs text-red-600 hover:text-red-800 hover:underline"
+        >
+          Remove
+        </button>
       </div>
 
       <div>

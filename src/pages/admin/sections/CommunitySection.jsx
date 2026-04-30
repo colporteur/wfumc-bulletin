@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase, withTimeout } from '../../../lib/supabase';
 import LoadingSpinner from '../../../components/LoadingSpinner.jsx';
+import SortableList, { DragHandle } from '../../../components/SortableList.jsx';
 
 // Block types we expose in the admin "Add" menu. ('photo' is in the DB
 // schema but waits until the Supabase Storage bucket is set up.)
@@ -120,48 +121,28 @@ export default function CommunitySection({ bulletin }) {
     }
   };
 
-  const moveBlock = async (id, direction) => {
+  const reorderBlocks = async (newOrderedIds) => {
     setError(null);
-    const idx = blocks.findIndex((b) => b.id === id);
-    if (idx < 0) return;
-    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
-    if (swapIdx < 0 || swapIdx >= blocks.length) return;
-
-    const a = blocks[idx];
-    const b = blocks[swapIdx];
-    // Swap positions in DB. Use a temp value to avoid the unique
-    // (bulletin_id, position) constraint kicking in mid-swap.
+    const oldBlocks = blocks;
+    const newBlocks = newOrderedIds
+      .map((id) => oldBlocks.find((b) => b.id === id))
+      .filter(Boolean);
+    setBlocks(newBlocks.map((b, i) => ({ ...b, position: i })));
     try {
-      // Step 1: park `a` at a temporary position (-1 - idx, guaranteed unused)
-      const temp = -1 - idx;
-      const r1 = await withTimeout(
-        supabase.from('tools_blocks').update({ position: temp }).eq('id', a.id)
+      await Promise.all(
+        oldBlocks.map((b, i) =>
+          withTimeout(
+            supabase.from('tools_blocks').update({ position: -1 - i }).eq('id', b.id)
+          )
+        )
       );
-      if (r1.error) throw r1.error;
-      // Step 2: move `b` into `a`'s old slot
-      const r2 = await withTimeout(
-        supabase
-          .from('tools_blocks')
-          .update({ position: a.position })
-          .eq('id', b.id)
+      await Promise.all(
+        newBlocks.map((b, i) =>
+          withTimeout(
+            supabase.from('tools_blocks').update({ position: i }).eq('id', b.id)
+          )
+        )
       );
-      if (r2.error) throw r2.error;
-      // Step 3: move `a` into `b`'s old slot
-      const r3 = await withTimeout(
-        supabase
-          .from('tools_blocks')
-          .update({ position: b.position })
-          .eq('id', a.id)
-      );
-      if (r3.error) throw r3.error;
-
-      // Reflect in local state
-      setBlocks((bs) => {
-        const next = [...bs];
-        next[idx] = { ...b, position: a.position };
-        next[swapIdx] = { ...a, position: b.position };
-        return next;
-      });
     } catch (e) {
       setError(e.message);
       await load();
@@ -176,7 +157,7 @@ export default function CommunitySection({ bulletin }) {
         <h2 className="font-serif text-xl text-umc-900">Community (TOOLs)</h2>
         <p className="text-sm text-gray-600 mt-1">
           Flexible blocks for the Time Of Our Lives section. Mix and match
-          results, quotes, tables, and notes. Reorder with the arrows.
+          results, quotes, tables, and notes. Drag the ⋮⋮ handle to reorder.
         </p>
       </div>
 
@@ -213,64 +194,39 @@ export default function CommunitySection({ bulletin }) {
         </div>
       )}
 
-      {blocks.map((b, i) => (
-        <BlockCard
-          key={b.id}
-          block={b}
-          isFirst={i === 0}
-          isLast={i === blocks.length - 1}
-          onUpdate={(newData) => updateBlockData(b.id, newData)}
-          onRemove={() => removeBlock(b.id)}
-          onMoveUp={() => moveBlock(b.id, 'up')}
-          onMoveDown={() => moveBlock(b.id, 'down')}
-        />
-      ))}
+      <SortableList
+        items={blocks}
+        onReorder={reorderBlocks}
+        renderItem={(b, handleProps) => (
+          <BlockCard
+            block={b}
+            onUpdate={(newData) => updateBlockData(b.id, newData)}
+            onRemove={() => removeBlock(b.id)}
+            dragHandleProps={handleProps}
+          />
+        )}
+      />
     </div>
   );
 }
 
-function BlockCard({
-  block,
-  isFirst,
-  isLast,
-  onUpdate,
-  onRemove,
-  onMoveUp,
-  onMoveDown,
-}) {
+function BlockCard({ block, onUpdate, onRemove, dragHandleProps }) {
   return (
     <div className="card space-y-3">
       <div className="flex items-center justify-between border-b border-gray-100 pb-2">
-        <span className="text-xs uppercase tracking-wide text-gray-500">
-          {blockTypeLabel(block.block_type)}
-        </span>
-        <div className="flex gap-1">
-          <button
-            type="button"
-            onClick={onMoveUp}
-            disabled={isFirst}
-            className="text-gray-500 hover:text-gray-800 disabled:opacity-30 disabled:cursor-not-allowed px-2"
-            title="Move up"
-          >
-            ↑
-          </button>
-          <button
-            type="button"
-            onClick={onMoveDown}
-            disabled={isLast}
-            className="text-gray-500 hover:text-gray-800 disabled:opacity-30 disabled:cursor-not-allowed px-2"
-            title="Move down"
-          >
-            ↓
-          </button>
-          <button
-            type="button"
-            onClick={onRemove}
-            className="text-xs text-red-600 hover:text-red-800 hover:underline ml-2"
-          >
-            Remove
-          </button>
+        <div className="flex items-center gap-1">
+          <DragHandle handleProps={dragHandleProps} />
+          <span className="text-xs uppercase tracking-wide text-gray-500">
+            {blockTypeLabel(block.block_type)}
+          </span>
         </div>
+        <button
+          type="button"
+          onClick={onRemove}
+          className="text-xs text-red-600 hover:text-red-800 hover:underline"
+        >
+          Remove
+        </button>
       </div>
 
       {block.block_type === 'result' && (
