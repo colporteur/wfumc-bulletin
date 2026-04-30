@@ -17,6 +17,16 @@ function nextSundayISO() {
   return d.toISOString().slice(0, 10);
 }
 
+// Given an ISO date (YYYY-MM-DD), return the next Sunday strictly AFTER it.
+function nextSundayAfter(yyyymmdd) {
+  const d = new Date(yyyymmdd + 'T00:00:00');
+  d.setDate(d.getDate() + 1);
+  while (d.getDay() !== 0) {
+    d.setDate(d.getDate() + 1);
+  }
+  return d.toISOString().slice(0, 10);
+}
+
 export default function BulletinList() {
   const [bulletins, setBulletins] = useState(null);
   const [creating, setCreating] = useState(false);
@@ -46,25 +56,13 @@ export default function BulletinList() {
     let copiedFrom = null;
 
     try {
-      // 1. Create the new bulletin row
-      const insertRes = await withTimeout(
-        supabase
-          .from('bulletins')
-          .insert({ service_date: nextSundayISO(), status: 'draft' })
-          .select()
-          .single()
-      );
-      if (insertRes.error) throw insertRes.error;
-      newBulletin = insertRes.data;
-
-      // 2. Find the most recent OTHER bulletin to copy the liturgy from.
-      //    (Sermons, stewardship, attendance, etc. are all per-week and
-      //    intentionally NOT carried forward.)
+      // 1. Find the most recent existing bulletin. We use it for two
+      //    things: deciding what date the new bulletin should be (the
+      //    Sunday after the previous one), and copying its liturgy.
       const prevRes = await withTimeout(
         supabase
           .from('bulletins')
           .select('id, service_date')
-          .neq('id', newBulletin.id)
           .order('service_date', { ascending: false })
           .order('created_at', { ascending: false })
           .limit(1)
@@ -72,6 +70,27 @@ export default function BulletinList() {
       );
       if (prevRes.error) throw prevRes.error;
 
+      // 2. Pick the new service_date.
+      //    - No prior bulletin → next upcoming Sunday from today.
+      //    - Prior bulletin    → first Sunday strictly AFTER its date.
+      const newDate = prevRes.data
+        ? nextSundayAfter(prevRes.data.service_date)
+        : nextSundayISO();
+
+      // 3. Create the new bulletin row.
+      const insertRes = await withTimeout(
+        supabase
+          .from('bulletins')
+          .insert({ service_date: newDate, status: 'draft' })
+          .select()
+          .single()
+      );
+      if (insertRes.error) throw insertRes.error;
+      newBulletin = insertRes.data;
+
+      // 4. If we had a prior bulletin, copy its liturgy items over.
+      //    (Sermon, stewardship, attendance, TOOLs, announcements, etc.
+      //    are all per-week and intentionally NOT carried forward.)
       if (prevRes.data) {
         const itemsRes = await withTimeout(
           supabase
