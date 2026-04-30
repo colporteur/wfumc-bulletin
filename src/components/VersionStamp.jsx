@@ -20,7 +20,7 @@ function fmt(iso) {
 
 export default function VersionStamp() {
   return (
-    <p className="no-print text-[10px] text-gray-300 text-center mt-4">
+    <p className="no-print text-[11px] text-gray-500 text-center mt-4">
       v {fmt(buildTime)} · {buildSha}
     </p>
   );

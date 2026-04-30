@@ -898,6 +898,15 @@ function HymnFields({ item, onUpdate }) {
         with your phone's camera app first, then come back here and tap
         Gallery to pick it.
       </p>
+      <p className="text-xs text-gray-400 mt-1">
+        <strong>If you get a "Could not process image" error</strong> on
+        Samsung or other Android phones, your camera is probably saving
+        as HEIF/HEIC — a format Anthropic's API doesn't accept. In your
+        phone's Camera app settings, find an option like "Picture
+        formats" or "Save HEIF pictures" and switch to JPEG. iPhones
+        have the same setting under Settings → Camera → Formats → Most
+        Compatible.
+      </p>
     </fieldset>
   );
 }
