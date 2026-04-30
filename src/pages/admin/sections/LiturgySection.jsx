@@ -796,7 +796,6 @@ function HymnFields({ item, onUpdate }) {
               ref={fileInputRef}
               type="file"
               accept="image/*"
-              capture="environment"
               className="hidden"
               onChange={handleHymnImage}
               disabled={analyzing}
@@ -845,11 +844,11 @@ function HymnFields({ item, onUpdate }) {
         <p className="text-xs text-umc-700 mt-2">{fillNote}</p>
       )}
       <p className="text-xs text-gray-400 mt-2">
-        On a phone, the photo button opens the camera so you can snap the
-        hymnal page directly. Claude reads what's on the page and fills in
-        title, tune, bio, and lyrics. Lyrics land in the "Expanded detail"
-        field below — verify before publishing under your CCLI/OneLicense
-        coverage.
+        Tap the photo button to take a fresh picture of the hymnal page or
+        pick an existing one from your gallery. Claude reads what's on the
+        page and fills in title, tune, bio, and lyrics (lyrics land in the
+        "Expanded detail" field below). Verify before publishing under your
+        CCLI/OneLicense coverage.
       </p>
     </fieldset>
   );
