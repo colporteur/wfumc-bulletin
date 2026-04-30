@@ -796,6 +796,20 @@ function HymnFields({ item, onUpdate }) {
               analyzing ? 'opacity-50 pointer-events-none' : ''
             }`}
             title="Open the camera to take a fresh photo of the hymnal page"
+            onClick={() => {
+              // Save current URL so we can restore it if Android kills
+              // the browser tab during camera capture.
+              try {
+                sessionStorage.setItem(
+                  'wfumc-photo-return',
+                  window.location.pathname +
+                    window.location.search +
+                    window.location.hash
+                );
+              } catch {
+                /* sessionStorage may be unavailable; non-fatal */
+              }
+            }}
           >
             📷 Camera
             <input
@@ -876,6 +890,13 @@ function HymnFields({ item, onUpdate }) {
         file. Claude reads the page and fills in title, tune, bio, and
         lyrics (lyrics land in the "Expanded detail" field below). Verify
         before publishing under your CCLI/OneLicense coverage.
+      </p>
+      <p className="text-xs text-gray-400 mt-1">
+        <strong>Tip for mobile:</strong> if Camera kicks you back to the
+        dashboard (Android sometimes kills the browser to free memory for
+        the camera app), the more reliable workflow is to take the photo
+        with your phone's camera app first, then come back here and tap
+        Gallery to pick it.
       </p>
     </fieldset>
   );
