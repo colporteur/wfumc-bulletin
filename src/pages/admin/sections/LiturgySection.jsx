@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase, withTimeout, callClaude } from '../../../lib/supabase';
+import { downsizeImage, blobToBase64 } from '../../../lib/imageHelpers';
 import LoadingSpinner from '../../../components/LoadingSpinner.jsx';
 
 // =====================================================================
@@ -551,36 +552,126 @@ function TypeSpecificFields({ item, onUpdate, onUpdateSermon }) {
 }
 
 function HymnFields({ item, onUpdate }) {
-  const [filling, setFilling] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const [fillError, setFillError] = useState(null);
-  // Local mirrors so Claude-fill updates render without round-tripping props
+  const [fillNote, setFillNote] = useState(null);
+  const fileInputRef = useRef(null);
+
+  // Local mirrors so external updates (Claude vision / cache) appear immediately
   const [hymnTitle, setHymnTitle] = useState(item.hymn_title ?? '');
   const [tuneName, setTuneName] = useState(item.tune_name ?? '');
   const [hymnBio, setHymnBio] = useState(item.hymn_bio ?? '');
 
-  const autoFill = async () => {
-    if (!item.hymnal_source || !item.hymn_number?.trim()) {
-      setFillError('Choose a hymnal and enter a hymn number first.');
+  // Sync local mirrors when item props change externally
+  useEffect(() => setHymnTitle(item.hymn_title ?? ''), [item.hymn_title]);
+  useEffect(() => setTuneName(item.tune_name ?? ''), [item.tune_name]);
+  useEffect(() => setHymnBio(item.hymn_bio ?? ''), [item.hymn_bio]);
+
+  // Auto-fill from hymn_cache when hymnal + number are both set AND the
+  // hymn fields are still empty (don't overwrite existing data silently).
+  useEffect(() => {
+    const source = item.hymnal_source;
+    const number = item.hymn_number?.trim();
+    if (!source || !number) return;
+    if (item.hymn_title || item.tune_name) return; // already filled
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await withTimeout(
+          supabase
+            .from('hymn_cache')
+            .select('*')
+            .eq('hymnal_source', source)
+            .eq('hymn_number', number)
+            .maybeSingle()
+        );
+        if (cancelled || !data) return;
+
+        const updates = {};
+        if (data.hymn_title) {
+          updates.hymn_title = data.hymn_title;
+          setHymnTitle(data.hymn_title);
+        }
+        if (data.tune_name) {
+          updates.tune_name = data.tune_name;
+          setTuneName(data.tune_name);
+        }
+        if (data.hymn_bio) {
+          updates.hymn_bio = data.hymn_bio;
+          setHymnBio(data.hymn_bio);
+        }
+        if (data.lyrics) {
+          updates.expanded_detail = data.lyrics;
+        }
+        if (Object.keys(updates).length > 0) {
+          onUpdate(updates);
+          setFillNote('Auto-filled from saved hymn cache.');
+        }
+      } catch {
+        // Silent — cache miss is fine, photo upload still works.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.hymnal_source, item.hymn_number]);
+
+  const handleHymnImage = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setFillError('Please select an image file.');
       return;
     }
-    setFilling(true);
+
+    setAnalyzing(true);
     setFillError(null);
+    setFillNote(null);
+
     try {
+      // Downscale + base64 encode
+      const blob = await downsizeImage(file, 1600, 0.85);
+      const base64 = await blobToBase64(blob);
+
+      const hymnalContext = item.hymnal_source
+        ? `from the ${item.hymnal_source === 'UMH' ? 'United Methodist Hymnal' : 'The Faith We Sing'}`
+        : 'from a hymnal';
+      const numberContext = item.hymn_number
+        ? `(it should be hymn #${item.hymn_number})`
+        : '';
+
       const result = await callClaude({
         system:
-          'You are helping prepare a church bulletin. Look up a hymn from the United Methodist Hymnal (UMH) or The Faith We Sing (TFWS) by its number and return ONLY a JSON object — no markdown code fences, no preamble, no commentary. Schema: { "title": string, "tune_name": string, "author": string, "year": string, "bio": string }. The "bio" should be 1–2 sentences about the hymn or composer. If you don\'t know the hymn with confidence, return all-empty strings. Never fabricate.',
+          "You are reading a photo of a hymnal page to help prepare a church bulletin. Look at the image carefully and return ONLY a JSON object — no markdown code fences, no commentary. Schema: { \"title\": string, \"tune_name\": string, \"author\": string, \"composer\": string, \"year\": string, \"bio\": string, \"lyrics\": string }. For 'lyrics', use plain text with each verse prefixed by [1], [2], [3]... and a blank line between verses. Include refrains exactly as printed (label them 'Refrain:'). For 'bio', a short factual note (1-2 sentences) about the hymn or its background. Do NOT fabricate; if you can't read part of the page, leave that field empty.",
         messages: [
           {
             role: 'user',
-            content: `Look up ${item.hymnal_source} #${item.hymn_number}.`,
+            content: [
+              {
+                type: 'text',
+                text: `This is a hymn page ${hymnalContext} ${numberContext}. Please read it carefully and return the JSON.`,
+              },
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/jpeg',
+                  data: base64,
+                },
+              },
+            ],
           },
         ],
-        max_tokens: 500,
+        max_tokens: 4000,
       });
+
       const text = result?.content?.[0]?.text?.trim();
       if (!text) throw new Error('Claude returned no text.');
 
-      // Strip markdown code fences if Claude wrapped them despite the system prompt
+      // Strip markdown code fences if present despite the system prompt
       let jsonStr = text;
       const m = text.match(/```(?:json)?\s*([\s\S]*?)```/);
       if (m) jsonStr = m[1].trim();
@@ -593,33 +684,75 @@ function HymnFields({ item, onUpdate }) {
       }
 
       const updates = {};
+      const filledFields = [];
+
       if (data.title) {
         updates.hymn_title = data.title;
         setHymnTitle(data.title);
+        filledFields.push('title');
       }
       if (data.tune_name) {
         updates.tune_name = data.tune_name;
         setTuneName(data.tune_name);
+        filledFields.push('tune');
       }
       const bioParts = [];
-      if (data.author) bioParts.push(`Composed by ${data.author}`);
+      if (data.author) bioParts.push(`Words by ${data.author}`);
+      if (data.composer) bioParts.push(`Tune by ${data.composer}`);
       if (data.year) bioParts.push(`(${data.year})`);
       if (data.bio) bioParts.push(data.bio);
-      const bio = bioParts.join(' ').trim();
+      const bio = bioParts.join(' • ').trim();
       if (bio) {
         updates.hymn_bio = bio;
         setHymnBio(bio);
+        filledFields.push('bio');
+      }
+      if (data.lyrics) {
+        updates.expanded_detail = data.lyrics;
+        filledFields.push('lyrics');
       }
 
       if (Object.keys(updates).length === 0) {
-        setFillError("Claude doesn't recognize that hymn — please fill manually.");
+        setFillError("Claude couldn't read the page clearly. Try a sharper photo.");
       } else {
         onUpdate(updates);
+
+        // Save to hymn_cache so future entries with the same hymnal+number
+        // auto-fill instantly without a fresh photo. Best-effort; if the
+        // cache write fails we still keep the in-bulletin fill.
+        if (item.hymnal_source && item.hymn_number?.trim()) {
+          try {
+            await withTimeout(
+              supabase.from('hymn_cache').upsert(
+                {
+                  hymnal_source: item.hymnal_source,
+                  hymn_number: item.hymn_number.trim(),
+                  hymn_title: data.title || null,
+                  tune_name: data.tune_name || null,
+                  hymn_bio: bio || null,
+                  lyrics: data.lyrics || null,
+                  updated_at: new Date().toISOString(),
+                },
+                { onConflict: 'hymnal_source,hymn_number' }
+              )
+            );
+            setFillNote(
+              `Filled in: ${filledFields.join(', ')}. Saved for future use.`
+            );
+          } catch {
+            setFillNote(`Filled in: ${filledFields.join(', ')}.`);
+          }
+        } else {
+          setFillNote(
+            `Filled in: ${filledFields.join(', ')}. Add hymnal + number to save for next time.`
+          );
+        }
       }
-    } catch (e) {
-      setFillError(e.message || String(e));
+    } catch (e2) {
+      setFillError(e2.message || String(e2));
     } finally {
-      setFilling(false);
+      setAnalyzing(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -628,6 +761,7 @@ function HymnFields({ item, onUpdate }) {
       <legend className="text-xs uppercase tracking-wide text-gray-500 px-1">
         Hymn details
       </legend>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-1">
         <div>
           <label className="label">Hymnal</label>
@@ -656,17 +790,20 @@ function HymnFields({ item, onUpdate }) {
           />
         </div>
         <div className="flex items-end">
-          <button
-            type="button"
-            onClick={autoFill}
-            disabled={
-              filling || !item.hymnal_source || !item.hymn_number
-            }
-            className="btn-secondary text-sm w-full disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {filling ? 'Asking Claude…' : '✨ Look up'}
-          </button>
+          <label className="btn-secondary text-sm w-full text-center cursor-pointer disabled:opacity-50">
+            {analyzing ? 'Reading page…' : '📷 Photo of hymnal page'}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={handleHymnImage}
+              disabled={analyzing}
+            />
+          </label>
         </div>
+
         <div className="md:col-span-3">
           <label className="label">Hymn title</label>
           <input
@@ -700,13 +837,19 @@ function HymnFields({ item, onUpdate }) {
           />
         </div>
       </div>
+
       {fillError && (
         <p className="text-xs text-red-600 mt-2">{fillError}</p>
       )}
+      {fillNote && (
+        <p className="text-xs text-umc-700 mt-2">{fillNote}</p>
+      )}
       <p className="text-xs text-gray-400 mt-2">
-        Auto-fill returns title / tune / brief bio. Claude does not return
-        copyrighted lyrics — those still need to be added manually under
-        your CCLI/OneLicense coverage.
+        On a phone, the photo button opens the camera so you can snap the
+        hymnal page directly. Claude reads what's on the page and fills in
+        title, tune, bio, and lyrics. Lyrics land in the "Expanded detail"
+        field below — verify before publishing under your CCLI/OneLicense
+        coverage.
       </p>
     </fieldset>
   );
@@ -884,13 +1027,29 @@ function SermonFields({ sermon, onUpdate }) {
 // ---------------------------------------------------------------------
 
 function ExpandableFields({ item, onUpdate }) {
+  // Local state mirrors so external updates (e.g., Claude auto-fill from
+  // a hymnal photo) immediately appear in the textareas.
+  const [inlineBody, setInlineBody] = useState(item.inline_body ?? '');
+  const [expandedDetail, setExpandedDetail] = useState(
+    item.expanded_detail ?? ''
+  );
+
+  // Sync from props when they change from elsewhere (auto-fill, save).
+  useEffect(() => {
+    setInlineBody(item.inline_body ?? '');
+  }, [item.inline_body]);
+  useEffect(() => {
+    setExpandedDetail(item.expanded_detail ?? '');
+  }, [item.expanded_detail]);
+
   return (
     <div className="space-y-3">
       <div>
         <label className="label">Inline body (optional)</label>
         <textarea
           className="input min-h-[80px]"
-          defaultValue={item.inline_body ?? ''}
+          value={inlineBody}
+          onChange={(e) => setInlineBody(e.target.value)}
           onBlur={(e) => onUpdate({ inline_body: e.target.value || null })}
           placeholder="Text shown inline below the title — e.g., a short responsive reading or call to worship."
         />
@@ -898,8 +1057,9 @@ function ExpandableFields({ item, onUpdate }) {
       <div>
         <label className="label">Expanded detail (optional)</label>
         <textarea
-          className="input min-h-[80px]"
-          defaultValue={item.expanded_detail ?? ''}
+          className="input min-h-[120px] font-mono text-xs"
+          value={expandedDetail}
+          onChange={(e) => setExpandedDetail(e.target.value)}
           onBlur={(e) =>
             onUpdate({ expanded_detail: e.target.value || null })
           }
