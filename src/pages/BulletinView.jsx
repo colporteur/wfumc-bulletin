@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext.jsx';
+import { supabase, withTimeout } from '../lib/supabase';
+
+const PRAYER_TEXT_LIMIT = 60;
 
 // =====================================================================
 // Worshipper-facing bulletin display.
@@ -18,6 +21,7 @@ import { useAuth } from '../contexts/AuthContext.jsx';
 const SECTIONS = [
   { id: 'cover', label: 'Cover' },
   { id: 'welcome', label: 'Welcome' },
+  { id: 'checkin', label: 'Check In' },
   { id: 'liturgy', label: 'Order of Worship' },
   { id: 'prayer', label: 'Prayer' },
   { id: 'stewardship', label: 'Stewardship' },
@@ -112,6 +116,7 @@ export default function BulletinView({ data }) {
         weekly={data.weekly}
         birthdays={data.birthdays}
       />
+      <CheckInSection bulletin={data.bulletin} />
       <LiturgySection
         items={data.liturgy}
         bulletin={data.bulletin}
@@ -660,12 +665,410 @@ function PrayerSection({ categories, requests }) {
             </div>
           );
         })}
-        <p className="text-xs text-gray-400 pt-3 border-t border-gray-100">
-          To submit a prayer request, please contact the church office.
-          (In-app submission coming soon.)
-        </p>
       </div>
+      {categories.length > 0 && <PrayerSubmitForm categories={categories} />}
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Check-in (entirely optional — clearly labeled as such)
+// ---------------------------------------------------------------------
+function CheckInSection({ bulletin }) {
+  const [open, setOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState(null);
+  const [draft, setDraft] = useState({
+    is_anonymous: false,
+    full_name: '',
+    email: '',
+    phone: '',
+    is_visitor: false,
+  });
+
+  const reset = () =>
+    setDraft({
+      is_anonymous: false,
+      full_name: '',
+      email: '',
+      phone: '',
+      is_visitor: false,
+    });
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!draft.is_anonymous && !draft.full_name.trim()) {
+      setError('Please enter your name or check "Submit anonymously".');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const { error: err } = await withTimeout(
+        supabase.from('check_ins').insert({
+          bulletin_id: bulletin.id,
+          is_anonymous: draft.is_anonymous,
+          full_name: draft.is_anonymous ? null : draft.full_name.trim() || null,
+          email: draft.is_anonymous ? null : draft.email.trim() || null,
+          phone: draft.is_anonymous ? null : draft.phone.trim() || null,
+          is_visitor: draft.is_visitor,
+        })
+      );
+      if (err) throw err;
+      setSubmitted(true);
+      reset();
+    } catch (e2) {
+      setError(e2.message || String(e2));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <section id="checkin" className="space-y-3">
+      <SectionHeading>
+        Check In{' '}
+        <span className="text-sm font-normal text-gray-500 italic">
+          (optional)
+        </span>
+      </SectionHeading>
+
+      {submitted ? (
+        <div className="card text-center space-y-2">
+          <p className="text-sm text-umc-900">
+            Thank you for letting us know you're here today!
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setSubmitted(false);
+              setOpen(false);
+            }}
+            className="text-xs text-umc-700 underline"
+          >
+            Done
+          </button>
+        </div>
+      ) : !open ? (
+        <div className="card space-y-3 text-center">
+          <p className="text-sm text-gray-600">
+            If you'd like to let us know you're worshipping with us today,
+            you're welcome to check in. This is entirely optional.
+          </p>
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="btn-secondary"
+          >
+            Check in
+          </button>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="card space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="font-serif text-lg text-umc-900">Check In</h3>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                reset();
+                setError(null);
+              }}
+              className="text-xs text-gray-500 hover:text-gray-700"
+            >
+              Cancel
+            </button>
+          </div>
+
+          <p className="text-xs text-gray-500">
+            All fields are optional except a name (or check the anonymous
+            box). Email and phone are only used by church staff if they want
+            to follow up.
+          </p>
+
+          {error && (
+            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
+              {error}
+            </p>
+          )}
+
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={draft.is_anonymous}
+              onChange={(e) =>
+                setDraft({ ...draft, is_anonymous: e.target.checked })
+              }
+              className="h-4 w-4 rounded border-gray-300 text-umc-700"
+            />
+            <span className="text-sm text-gray-700">
+              Check in anonymously (just a count, no name)
+            </span>
+          </label>
+
+          <div>
+            <label className="label">Your name</label>
+            <input
+              type="text"
+              className="input"
+              value={draft.full_name}
+              onChange={(e) =>
+                setDraft({ ...draft, full_name: e.target.value })
+              }
+              disabled={draft.is_anonymous}
+              placeholder={draft.is_anonymous ? 'Anonymous' : 'e.g., Jane Smith'}
+            />
+          </div>
+
+          <div>
+            <label className="label">
+              Email{' '}
+              <span className="text-xs text-gray-400 font-normal">
+                (optional)
+              </span>
+            </label>
+            <input
+              type="email"
+              className="input"
+              value={draft.email}
+              onChange={(e) => setDraft({ ...draft, email: e.target.value })}
+              disabled={draft.is_anonymous}
+              autoComplete="email"
+            />
+          </div>
+
+          <div>
+            <label className="label">
+              Phone{' '}
+              <span className="text-xs text-gray-400 font-normal">
+                (optional)
+              </span>
+            </label>
+            <input
+              type="tel"
+              className="input"
+              value={draft.phone}
+              onChange={(e) => setDraft({ ...draft, phone: e.target.value })}
+              disabled={draft.is_anonymous}
+              autoComplete="tel"
+            />
+          </div>
+
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={draft.is_visitor}
+              onChange={(e) =>
+                setDraft({ ...draft, is_visitor: e.target.checked })
+              }
+              className="h-4 w-4 rounded border-gray-300 text-umc-700"
+            />
+            <span className="text-sm text-gray-700">
+              I'm a first-time visitor
+            </span>
+          </label>
+
+          <button
+            type="submit"
+            disabled={submitting}
+            className="btn-primary w-full disabled:opacity-50"
+          >
+            {submitting ? 'Submitting…' : 'Check in'}
+          </button>
+        </form>
+      )}
+    </section>
+  );
+}
+
+function PrayerSubmitForm({ categories }) {
+  const [open, setOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState(null);
+  const [draft, setDraft] = useState({
+    category_id: categories[0]?.id ?? '',
+    is_anonymous: false,
+    submitter_name: '',
+    praying_for: '',
+    situation: '',
+  });
+
+  const reset = () =>
+    setDraft({
+      category_id: categories[0]?.id ?? '',
+      is_anonymous: false,
+      submitter_name: '',
+      praying_for: '',
+      situation: '',
+    });
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!draft.praying_for.trim()) {
+      setError('"Praying For" is required.');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const { error: err } = await withTimeout(
+        supabase.from('prayer_requests').insert({
+          category_id: draft.category_id || null,
+          is_anonymous: draft.is_anonymous,
+          submitter_name: draft.is_anonymous
+            ? null
+            : draft.submitter_name.trim() || null,
+          praying_for: draft.praying_for.trim(),
+          situation: draft.situation.trim() || null,
+          removal_mode: 'auto_4weeks',
+        })
+      );
+      if (err) throw err;
+      setSubmitted(true);
+      reset();
+    } catch (e2) {
+      setError(e2.message || String(e2));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (submitted) {
+    return (
+      <div className="card text-center space-y-2">
+        <p className="text-sm text-umc-900">Thank you. Your prayer request has been submitted.</p>
+        <button
+          type="button"
+          onClick={() => setSubmitted(false)}
+          className="text-xs text-umc-700 underline"
+        >
+          Submit another
+        </button>
+      </div>
+    );
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="btn-secondary w-full"
+      >
+        + Submit a prayer request
+      </button>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="card space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="font-serif text-lg text-umc-900">Submit a prayer request</h3>
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false);
+            reset();
+            setError(null);
+          }}
+          className="text-xs text-gray-500 hover:text-gray-700"
+        >
+          Cancel
+        </button>
+      </div>
+
+      {error && (
+        <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
+          {error}
+        </p>
+      )}
+
+      <div>
+        <label className="label">Category</label>
+        <select
+          className="input"
+          value={draft.category_id}
+          onChange={(e) => setDraft({ ...draft, category_id: e.target.value })}
+        >
+          {categories.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <label className="flex items-center gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={draft.is_anonymous}
+          onChange={(e) =>
+            setDraft({ ...draft, is_anonymous: e.target.checked })
+          }
+          className="h-4 w-4 rounded border-gray-300 text-umc-700"
+        />
+        <span className="text-sm text-gray-700">Submit anonymously</span>
+      </label>
+
+      <div>
+        <label className="label">Your name</label>
+        <input
+          type="text"
+          className="input"
+          value={draft.submitter_name}
+          onChange={(e) =>
+            setDraft({ ...draft, submitter_name: e.target.value })
+          }
+          disabled={draft.is_anonymous}
+          placeholder={draft.is_anonymous ? 'Anonymous' : 'e.g., Jane Smith'}
+        />
+      </div>
+
+      <div>
+        <label className="label">
+          Praying For{' '}
+          <span className="text-xs text-gray-400 font-normal">
+            ({draft.praying_for.length}/{PRAYER_TEXT_LIMIT})
+          </span>
+        </label>
+        <input
+          type="text"
+          className="input"
+          maxLength={PRAYER_TEXT_LIMIT}
+          value={draft.praying_for}
+          onChange={(e) => setDraft({ ...draft, praying_for: e.target.value })}
+          required
+          placeholder="e.g., John Doe / The Anderson family"
+        />
+      </div>
+
+      <div>
+        <label className="label">
+          Situation{' '}
+          <span className="text-xs text-gray-400 font-normal">
+            (optional, {draft.situation.length}/{PRAYER_TEXT_LIMIT})
+          </span>
+        </label>
+        <input
+          type="text"
+          className="input"
+          maxLength={PRAYER_TEXT_LIMIT}
+          value={draft.situation}
+          onChange={(e) => setDraft({ ...draft, situation: e.target.value })}
+          placeholder="e.g., recovering from surgery"
+        />
+      </div>
+
+      <button
+        type="submit"
+        disabled={submitting}
+        className="btn-primary w-full disabled:opacity-50"
+      >
+        {submitting ? 'Submitting…' : 'Submit prayer request'}
+      </button>
+    </form>
   );
 }
 
