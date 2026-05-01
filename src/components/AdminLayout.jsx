@@ -19,13 +19,21 @@ export default function AdminLayout() {
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-umc-900 text-white px-4 py-3">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-3">
           <Link to="/admin" className="font-serif text-lg">
             WFUMC Bulletin Admin
           </Link>
-          <div className="flex items-center gap-4 text-sm">
-            <span className="text-umc-100">
-              {profile?.full_name} <span className="text-umc-200">({profile?.role})</span>
+          <div className="flex items-center gap-3 sm:gap-4 text-sm">
+            <Link
+              to="/"
+              className="text-umc-100 hover:text-white underline whitespace-nowrap"
+              title="See the worshipper-facing bulletin"
+            >
+              View bulletin →
+            </Link>
+            <span className="text-umc-100 hidden sm:inline">
+              {profile?.full_name}{' '}
+              <span className="text-umc-200">({profile?.role})</span>
             </span>
             <button
               onClick={handleSignOut}
