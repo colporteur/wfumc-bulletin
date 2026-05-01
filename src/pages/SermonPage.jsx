@@ -29,29 +29,26 @@ export default function SermonPage() {
       setLoading(true);
       setError(null);
       try {
-        const [sermonRes, linksRes] = await Promise.all([
+        const [sermonRes, preachRes] = await Promise.all([
           withTimeout(
             supabase.from('sermons').select('*').eq('id', id).maybeSingle()
           ),
           withTimeout(
             supabase
-              .from('liturgy_items')
+              .from('preachings')
               .select(
-                'bulletin:bulletins!inner(id, service_date, sunday_designation, status)'
+                '*, bulletin:bulletins(id, service_date, sunday_designation, status)'
               )
               .eq('sermon_id', id)
-              .eq('bulletin.status', 'published')
+              .eq('is_at_our_church', true)
+              .order('preached_at', { ascending: false, nullsFirst: false })
           ),
         ]);
         if (sermonRes.error) throw sermonRes.error;
-        if (linksRes.error) throw linksRes.error;
+        if (preachRes.error) throw preachRes.error;
         if (cancelled) return;
         setSermon(sermonRes.data);
-        const sorted = (linksRes.data ?? [])
-          .map((r) => r.bulletin)
-          .filter(Boolean)
-          .sort((a, b) => (a.service_date < b.service_date ? 1 : -1));
-        setPreachings(sorted);
+        setPreachings(preachRes.data ?? []);
       } catch (e) {
         if (!cancelled) setError(e.message || String(e));
       } finally {
@@ -113,21 +110,35 @@ export default function SermonPage() {
               Preached at WFUMC
             </p>
             <ul className="text-sm text-gray-700 space-y-0.5">
-              {preachings.map((b) => (
-                <li key={b.id}>
-                  <Link
-                    to={`/b/${b.service_date}`}
-                    className="text-umc-700 hover:underline"
-                  >
-                    {fmtDate(b.service_date)}
-                  </Link>
-                  {b.sunday_designation && (
-                    <span className="text-gray-500 ml-2">
-                      — {b.sunday_designation}
-                    </span>
-                  )}
-                </li>
-              ))}
+              {preachings.map((p) => {
+                const isPublishedBulletin =
+                  p.bulletin && p.bulletin.status === 'published';
+                return (
+                  <li key={p.id}>
+                    {p.preached_at ? (
+                      isPublishedBulletin ? (
+                        <Link
+                          to={`/b/${p.preached_at}`}
+                          className="text-umc-700 hover:underline"
+                        >
+                          {fmtDate(p.preached_at)}
+                        </Link>
+                      ) : (
+                        <span>{fmtDate(p.preached_at)}</span>
+                      )
+                    ) : (
+                      <span className="italic text-gray-400">
+                        Date unknown
+                      </span>
+                    )}
+                    {p.bulletin?.sunday_designation && (
+                      <span className="text-gray-500 ml-2">
+                        — {p.bulletin.sunday_designation}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}

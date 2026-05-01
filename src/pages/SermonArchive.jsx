@@ -27,41 +27,44 @@ export default function SermonArchive() {
       setLoading(true);
       setError(null);
       try {
-        // Strategy: pull every published bulletin's liturgy_items that
-        // have a sermon_id, plus the joined sermon. Then group/dedupe
-        // by sermon_id, keeping the latest service_date as the
-        // representative date. We rely on the existing RLS policy
-        // ("anyone can read sermons of published bulletins") to scope
-        // visibility correctly.
+        // Pull every preaching flagged is_at_our_church (covers both
+        // bulletin-linked AND historical/imported preachings whose
+        // location matches Wedowee). Group by sermon_id, keep the
+        // latest preached_at as the representative date.
         const { data, error: err } = await withTimeout(
           supabase
-            .from('liturgy_items')
+            .from('preachings')
             .select(
-              'sermon_id, sermon:sermons(id, title, scripture_reference, theme), bulletin:bulletins!inner(id, service_date, sunday_designation, status)'
+              'sermon_id, preached_at, location, sermon:sermons(id, title, scripture_reference, theme)'
             )
-            .not('sermon_id', 'is', null)
-            .eq('bulletin.status', 'published')
+            .eq('is_at_our_church', true)
+            .order('preached_at', { ascending: false, nullsFirst: false })
         );
         if (err) throw err;
 
-        // Group by sermon_id, keep latest service_date
         const map = new Map();
         for (const row of data ?? []) {
-          if (!row.sermon || !row.bulletin) continue;
+          if (!row.sermon) continue;
           const sid = row.sermon.id;
           const existing = map.get(sid);
-          if (!existing || row.bulletin.service_date > existing.latestDate) {
+          // First entry wins (server returned in date-desc order, so the
+          // first row per sermon IS the most recent preaching).
+          if (!existing) {
             map.set(sid, {
               sermon: row.sermon,
-              latestDate: row.bulletin.service_date,
-              latestDesignation: row.bulletin.sunday_designation,
-              latestBulletinId: row.bulletin.id,
+              latestDate: row.preached_at,
+              latestLocation: row.location,
             });
           }
         }
-        const list = Array.from(map.values()).sort((a, b) =>
-          a.latestDate < b.latestDate ? 1 : -1
-        );
+        // Sort: most-recent first, then sermons with unknown date last
+        const list = Array.from(map.values()).sort((a, b) => {
+          if (a.latestDate && b.latestDate)
+            return a.latestDate < b.latestDate ? 1 : -1;
+          if (a.latestDate) return -1;
+          if (b.latestDate) return 1;
+          return 0;
+        });
         if (!cancelled) setItems(list);
       } catch (e) {
         if (!cancelled) setError(e.message || String(e));
@@ -144,7 +147,7 @@ export default function SermonArchive() {
         </div>
       ) : (
         <ul className="space-y-3">
-          {filtered.map(({ sermon, latestDate, latestDesignation }) => (
+          {filtered.map(({ sermon, latestDate, latestLocation }) => (
             <li key={sermon.id}>
               <Link
                 to={`/sermons/${sermon.id}`}
@@ -169,12 +172,12 @@ export default function SermonArchive() {
                         </span>
                       )}
                       <span className="text-gray-500">
-                        {fmtDate(latestDate)}
+                        {latestDate ? fmtDate(latestDate) : 'Date unknown'}
                       </span>
                     </div>
-                    {latestDesignation && (
+                    {latestLocation && (
                       <p className="text-xs text-gray-400 mt-1">
-                        {latestDesignation}
+                        {latestLocation}
                       </p>
                     )}
                   </div>
