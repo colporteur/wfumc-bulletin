@@ -1,14 +1,18 @@
 // =====================================================================
 // claude-proxy — Supabase Edge Function
 //
-// Proxies requests from the admin UI to api.anthropic.com.
-// The Anthropic API key never leaves the server.
+// Proxies requests from the admin UI + Sermon Archive app to
+// api.anthropic.com. The Anthropic API key never leaves the server.
 //
 // Auth flow:
-//   1. The admin UI sends a request with the user's Supabase JWT
-//      in the `Authorization: Bearer <jwt>` header.
-//   2. This function verifies the user is authenticated AND has a
-//      staff_profile (any role).
+//   1. The caller sends a request with the user's Supabase JWT in
+//      the `Authorization: Bearer <jwt>` header.
+//   2. This function verifies the user is authenticated. (It does
+//      NOT require a staff_profile — multi-tenant apps like the
+//      Sermon Archive let any authenticated user call Claude assist.
+//      The shared Anthropic key + church account costs are a known
+//      trade-off; user accounts are provisioned manually so this is
+//      a small known set of users.)
 //   3. It reads the Anthropic API key from public.church_settings.
 //   4. It forwards the request body to Anthropic and returns the response.
 //
@@ -75,16 +79,7 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: 'Unauthorized' }, 401);
   }
 
-  // Verify the user is a staff member
-  const { data: staffProfile } = await userClient
-    .from('staff_profiles')
-    .select('role')
-    .eq('user_id', userData.user.id)
-    .single();
-
-  if (!staffProfile) {
-    return jsonResponse({ error: 'Staff access required' }, 403);
-  }
+  // (Authenticated user is sufficient — see header comment for rationale.)
 
   // 2. Read the Anthropic API key with the service-role client (bypasses RLS).
   const adminClient = createClient(supabaseUrl, supabaseServiceKey);
