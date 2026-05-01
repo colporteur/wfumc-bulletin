@@ -191,6 +191,38 @@ export default function LiturgySection({ bulletin }) {
   // For sermon items: write goes to the sermons table (not liturgy_items).
   // If the item doesn't yet have a sermon_id, lazy-create the sermon row
   // and link it back to the liturgy item.
+  // Ensure a preaching row exists for (bulletin, sermon). Idempotent —
+  // safe to call repeatedly. Marks is_at_our_church=true so this sermon
+  // shows in WFUMC's public archive going forward.
+  const ensurePreachingForBulletin = async (sermonId) => {
+    if (!sermonId || !bulletinId || !bulletin?.service_date) return;
+    try {
+      const { data: existing } = await withTimeout(
+        supabase
+          .from('preachings')
+          .select('id')
+          .eq('bulletin_id', bulletinId)
+          .eq('sermon_id', sermonId)
+          .maybeSingle()
+      );
+      if (existing) return;
+      await withTimeout(
+        supabase.from('preachings').insert({
+          sermon_id: sermonId,
+          bulletin_id: bulletinId,
+          preached_at: bulletin.service_date,
+          location: 'Wedowee First UMC',
+          is_at_our_church: true,
+          owner_user_id: user?.id ?? null,
+        })
+      );
+    } catch (e) {
+      // Best-effort — don't block the user's edit if this fails.
+      // eslint-disable-next-line no-console
+      console.warn('Failed to ensure preaching:', e);
+    }
+  };
+
   const updateSermonForItem = async (item, patch) => {
     setError(null);
     try {
@@ -215,6 +247,9 @@ export default function LiturgySection({ bulletin }) {
         if (linkErr) throw linkErr;
 
         setItems((xs) => xs.map((x) => (x.id === item.id ? updItem : x)));
+        // Auto-create the preaching so this sermon shows up in the
+        // public WFUMC archive once the bulletin is published.
+        await ensurePreachingForBulletin(sermon.id);
       } else {
         const { data: sermon, error: updErr } = await withTimeout(
           supabase
@@ -230,6 +265,27 @@ export default function LiturgySection({ bulletin }) {
           xs.map((x) => (x.id === item.id ? { ...x, sermon } : x))
         );
       }
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  // Link an existing sermon (chosen from the archive) to this liturgy
+  // item. Sets sermon_id + creates the corresponding preaching record.
+  const pickExistingSermonForItem = async (item, sermonId) => {
+    setError(null);
+    try {
+      const { data: updItem, error: linkErr } = await withTimeout(
+        supabase
+          .from('liturgy_items')
+          .update({ sermon_id: sermonId })
+          .eq('id', item.id)
+          .select('*, sermon:sermons(*)')
+          .single()
+      );
+      if (linkErr) throw linkErr;
+      setItems((xs) => xs.map((x) => (x.id === item.id ? updItem : x)));
+      await ensurePreachingForBulletin(sermonId);
     } catch (e) {
       setError(e.message);
     }
@@ -345,6 +401,9 @@ export default function LiturgySection({ bulletin }) {
                 }
                 onUpdate={(patch) => updateItem(it.id, patch)}
                 onUpdateSermon={(patch) => updateSermonForItem(it, patch)}
+                onPickSermon={(sermonId) =>
+                  pickExistingSermonForItem(it, sermonId)
+                }
                 onRemove={() => removeItem(it.id)}
                 dragHandleProps={handleProps}
               />
@@ -386,6 +445,7 @@ function LiturgyItemCard({
   onToggle,
   onUpdate,
   onUpdateSermon,
+  onPickSermon,
   onRemove,
   dragHandleProps,
 }) {
@@ -440,6 +500,7 @@ function LiturgyItemCard({
             item={item}
             onUpdate={onUpdate}
             onUpdateSermon={onUpdateSermon}
+            onPickSermon={onPickSermon}
           />
           <ExpandableFields item={item} onUpdate={onUpdate} />
         </div>
@@ -526,14 +587,20 @@ function CommonFields({ item, onUpdate }) {
 // Type-specific fields
 // ---------------------------------------------------------------------
 
-function TypeSpecificFields({ item, onUpdate, onUpdateSermon }) {
+function TypeSpecificFields({ item, onUpdate, onUpdateSermon, onPickSermon }) {
   switch (item.item_type) {
     case 'hymn':
       return <HymnFields item={item} onUpdate={onUpdate} />;
     case 'scripture':
       return <ScriptureFields item={item} onUpdate={onUpdate} />;
     case 'sermon':
-      return <SermonFields sermon={item.sermon} onUpdate={onUpdateSermon} />;
+      return (
+        <SermonFields
+          sermon={item.sermon}
+          onUpdate={onUpdateSermon}
+          onPickSermon={onPickSermon}
+        />
+      );
     default:
       return null;
   }
@@ -997,7 +1064,7 @@ function ScriptureFields({ item, onUpdate }) {
   );
 }
 
-function SermonFields({ sermon, onUpdate }) {
+function SermonFields({ sermon, onUpdate, onPickSermon }) {
   // sermon may be null until the user types something — the parent
   // lazy-creates the sermons row on first edit.
   const [manuscriptText, setManuscriptText] = useState(
@@ -1008,10 +1075,64 @@ function SermonFields({ sermon, onUpdate }) {
   const [uploadNote, setUploadNote] = useState(null);
   const docInputRef = useRef(null);
 
+  // Picker state — for attaching an existing sermon from the archive
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerSearch, setPickerSearch] = useState('');
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerResults, setPickerResults] = useState([]);
+  const [pickerError, setPickerError] = useState(null);
+
   // Sync if sermon prop changes (e.g., after lazy-create on first save)
   useEffect(() => {
     setManuscriptText(sermon?.manuscript_text ?? '');
   }, [sermon?.manuscript_text]);
+
+  const loadPickerResults = async (q) => {
+    setPickerLoading(true);
+    setPickerError(null);
+    try {
+      let query = supabase
+        .from('sermons')
+        .select(
+          'id, title, scripture_reference, theme, original_sermon_number, preached_at'
+        )
+        .order('preached_at', { ascending: false, nullsFirst: false })
+        .limit(50);
+      if (q) {
+        // Postgres "or" filter across title/scripture/theme
+        const safe = q.replace(/[%,]/g, '');
+        query = query.or(
+          `title.ilike.%${safe}%,scripture_reference.ilike.%${safe}%,theme.ilike.%${safe}%`
+        );
+      }
+      const { data, error: err } = await withTimeout(query);
+      if (err) throw err;
+      setPickerResults(data ?? []);
+    } catch (e) {
+      setPickerError(e.message);
+    } finally {
+      setPickerLoading(false);
+    }
+  };
+
+  const openPicker = async () => {
+    setPickerOpen(true);
+    setPickerSearch('');
+    await loadPickerResults('');
+  };
+
+  const handleSearchChange = (val) => {
+    setPickerSearch(val);
+    // Light debounce: just re-query on each change. List is capped at 50.
+    loadPickerResults(val);
+  };
+
+  const handlePickSermon = async (sermonId) => {
+    if (onPickSermon) {
+      await onPickSermon(sermonId);
+    }
+    setPickerOpen(false);
+  };
 
   const handleManuscriptUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -1061,6 +1182,103 @@ function SermonFields({ sermon, onUpdate }) {
       <legend className="text-xs uppercase tracking-wide text-gray-500 px-1">
         Sermon details
       </legend>
+
+      {/* Pick-existing-sermon picker — useful when re-preaching a sermon
+          from the archive instead of starting fresh */}
+      <div className="border border-umc-100 rounded-md p-3 bg-umc-50/30">
+        {!pickerOpen ? (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-gray-600">
+              Re-preaching a sermon you've given before?
+            </p>
+            <button
+              type="button"
+              onClick={openPicker}
+              className="btn-secondary text-xs whitespace-nowrap"
+            >
+              📚 Pick from archive
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <input
+                type="text"
+                className="input text-sm"
+                value={pickerSearch}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                placeholder="Search by title, scripture, or theme…"
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={() => setPickerOpen(false)}
+                className="text-xs text-gray-500 hover:text-gray-700 whitespace-nowrap"
+              >
+                Cancel
+              </button>
+            </div>
+            {pickerError && (
+              <p className="text-xs text-red-600">{pickerError}</p>
+            )}
+            {pickerLoading ? (
+              <p className="text-xs text-gray-500 italic">Loading…</p>
+            ) : pickerResults.length === 0 ? (
+              <p className="text-xs text-gray-400 italic">
+                No sermons match.
+              </p>
+            ) : (
+              <ul className="max-h-60 overflow-y-auto divide-y divide-gray-100 border border-gray-200 rounded bg-white">
+                {pickerResults.map((s) => (
+                  <li key={s.id}>
+                    <button
+                      type="button"
+                      onClick={() => handlePickSermon(s.id)}
+                      className="w-full text-left px-3 py-2 hover:bg-umc-50"
+                    >
+                      <div className="flex items-baseline gap-2">
+                        {s.original_sermon_number && (
+                          <span className="text-xs text-gray-400 font-mono">
+                            #{s.original_sermon_number}
+                          </span>
+                        )}
+                        <span className="font-medium text-sm text-gray-800 truncate">
+                          {s.title || (
+                            <span className="italic text-gray-400">
+                              Untitled
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="text-xs text-gray-500 mt-0.5 flex flex-wrap gap-x-2">
+                        {s.scripture_reference && (
+                          <span>{s.scripture_reference}</span>
+                        )}
+                        {s.theme && (
+                          <span className="italic">{s.theme}</span>
+                        )}
+                        {s.preached_at && (
+                          <span>
+                            First preached{' '}
+                            {new Date(
+                              s.preached_at + 'T00:00:00'
+                            ).toLocaleDateString()}
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="text-xs text-gray-400">
+              Picking a sermon links it to this bulletin and records a
+              new preaching for today's date.
+            </p>
+          </div>
+        )}
+      </div>
+
       <div>
         <label className="label">Sermon title</label>
         <input
