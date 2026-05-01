@@ -135,7 +135,9 @@ export default function ResponseSection({ bulletin, refresh }) {
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           onBlur={savePrompt}
-          placeholder='e.g., "What did you find meaningful in this week\'s worship?" or "What is on your heart as we enter worship this week?"'
+          placeholder={
+            'e.g., "What did you find meaningful in this week\'s worship?" or "What is on your heart as we enter worship this week?"'
+          }
         />
         <p className="text-xs text-gray-500">
           {savingPrompt ? 'Saving…' : 'Saves when you click out of the field.'}
