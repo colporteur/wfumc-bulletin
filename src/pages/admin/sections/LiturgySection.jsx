@@ -3,6 +3,7 @@ import { supabase, withTimeout, callClaude } from '../../../lib/supabase';
 import { prepareImageForUpload, blobToBase64 } from '../../../lib/imageHelpers';
 import LoadingSpinner from '../../../components/LoadingSpinner.jsx';
 import SortableList, { DragHandle } from '../../../components/SortableList.jsx';
+import { useAuth } from '../../../contexts/AuthContext.jsx';
 
 // =====================================================================
 // Liturgy editor for a single bulletin's Order of Worship.
@@ -82,6 +83,7 @@ const DEFAULT_ITEMS = [
 ];
 
 export default function LiturgySection({ bulletin }) {
+  const { user } = useAuth();
   const bulletinId = bulletin?.id;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -194,7 +196,11 @@ export default function LiturgySection({ bulletin }) {
     try {
       if (!item.sermon_id) {
         const { data: sermon, error: createErr } = await withTimeout(
-          supabase.from('sermons').insert(patch).select().single()
+          supabase
+            .from('sermons')
+            .insert({ ...patch, owner_user_id: user?.id ?? null })
+            .select()
+            .single()
         );
         if (createErr) throw createErr;
 

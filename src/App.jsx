@@ -2,6 +2,8 @@ import { Routes, Route } from 'react-router-dom';
 import Home from './pages/Home.jsx';
 import Archive from './pages/Archive.jsx';
 import BulletinPage from './pages/BulletinPage.jsx';
+import SermonArchive from './pages/SermonArchive.jsx';
+import SermonPage from './pages/SermonPage.jsx';
 import InstallHelp from './pages/InstallHelp.jsx';
 import NotFound from './pages/NotFound.jsx';
 import AdminLogin from './pages/admin/Login.jsx';
@@ -21,6 +23,8 @@ export default function App() {
         <Route path="/" element={<Home />} />
         <Route path="/archive" element={<Archive />} />
         <Route path="/b/:date" element={<BulletinPage />} />
+        <Route path="/sermons" element={<SermonArchive />} />
+        <Route path="/sermons/:id" element={<SermonPage />} />
         <Route path="/install" element={<InstallHelp />} />
       </Route>
 
