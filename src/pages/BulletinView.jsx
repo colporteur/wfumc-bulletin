@@ -134,6 +134,7 @@ export default function BulletinView({ data, onPrayerSubmitted }) {
       <WatchLiveButton settings={data.settings} bulletin={data.bulletin} />
       <WelcomeSection
         settings={data.settings}
+        bulletin={data.bulletin}
         events={data.events}
         weekly={data.weekly}
         birthdays={data.birthdays}
@@ -271,22 +272,23 @@ function WatchLiveButton({ settings, bulletin }) {
 // ---------------------------------------------------------------------
 // Welcome (blurb + calendar + each week + birthdays)
 // ---------------------------------------------------------------------
-function WelcomeSection({ settings, events, weekly, birthdays }) {
+function WelcomeSection({ settings, bulletin, events, weekly, birthdays }) {
   const monthName = MONTHS[new Date().getMonth()];
   const weeklyByDay = DAYS.map((dayName, idx) => ({
     dayName,
     items: weekly.filter((w) => w.day_of_week === idx),
   })).filter((d) => d.items.length > 0);
 
+  // Per-bulletin override wins over the church-wide default
+  const blurb = bulletin?.welcome_blurb || settings?.welcome_blurb;
+
   return (
     <section id="welcome" className="space-y-4">
       <SectionHeading>Welcome</SectionHeading>
 
-      {settings?.welcome_blurb && (
+      {blurb && (
         <div className="card">
-          <p className="text-sm text-gray-700 whitespace-pre-wrap">
-            {settings.welcome_blurb}
-          </p>
+          <p className="text-sm text-gray-700 whitespace-pre-wrap">{blurb}</p>
         </div>
       )}
 

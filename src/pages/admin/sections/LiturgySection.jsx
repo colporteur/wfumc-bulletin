@@ -994,6 +994,62 @@ function ScriptureFields({ item, onUpdate }) {
 function SermonFields({ sermon, onUpdate }) {
   // sermon may be null until the user types something — the parent
   // lazy-creates the sermons row on first edit.
+  const [manuscriptText, setManuscriptText] = useState(
+    sermon?.manuscript_text ?? ''
+  );
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState(null);
+  const [uploadNote, setUploadNote] = useState(null);
+  const docInputRef = useRef(null);
+
+  // Sync if sermon prop changes (e.g., after lazy-create on first save)
+  useEffect(() => {
+    setManuscriptText(sermon?.manuscript_text ?? '');
+  }, [sermon?.manuscript_text]);
+
+  const handleManuscriptUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const isDocx =
+      file.name.toLowerCase().endsWith('.docx') ||
+      file.type ===
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    if (!isDocx) {
+      setUploadError(
+        'Please upload a .docx file (Microsoft Word). PDF support is coming later.'
+      );
+      return;
+    }
+
+    setUploading(true);
+    setUploadError(null);
+    setUploadNote(null);
+
+    try {
+      // Lazy-import mammoth so it doesn't bloat the main bundle
+      const mammoth = (await import('mammoth')).default ?? (await import('mammoth'));
+      const arrayBuffer = await file.arrayBuffer();
+      const result = await mammoth.extractRawText({ arrayBuffer });
+      const text = (result?.value ?? '').trim();
+      if (!text) {
+        setUploadError(
+          "Couldn't extract any text from that document. It might be empty or image-only."
+        );
+        return;
+      }
+      setManuscriptText(text);
+      onUpdate({ manuscript_text: text });
+      const wordCount = text.split(/\s+/).filter(Boolean).length;
+      setUploadNote(`Loaded ${wordCount.toLocaleString()} words from ${file.name}.`);
+    } catch (err) {
+      setUploadError(err?.message || 'Failed to parse document.');
+    } finally {
+      setUploading(false);
+      if (docInputRef.current) docInputRef.current.value = '';
+    }
+  };
+
   return (
     <fieldset className="border border-gray-200 rounded-md p-3 bg-white space-y-4">
       <legend className="text-xs uppercase tracking-wide text-gray-500 px-1">
@@ -1015,17 +1071,44 @@ function SermonFields({ sermon, onUpdate }) {
         </p>
       </div>
       <div>
-        <label className="label">Sermon manuscript (text)</label>
+        <div className="flex items-center justify-between mb-1">
+          <label className="label mb-0">Sermon manuscript (text)</label>
+          <label
+            className={`text-xs cursor-pointer text-umc-700 hover:text-umc-900 underline ${
+              uploading ? 'opacity-50 pointer-events-none' : ''
+            }`}
+          >
+            {uploading ? 'Reading…' : '📄 Upload Word doc (.docx)'}
+            <input
+              ref={docInputRef}
+              type="file"
+              accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              className="hidden"
+              onChange={handleManuscriptUpload}
+              disabled={uploading}
+            />
+          </label>
+        </div>
         <textarea
           className="input min-h-[200px] font-mono text-sm"
-          defaultValue={sermon?.manuscript_text ?? ''}
+          value={manuscriptText}
+          onChange={(e) => setManuscriptText(e.target.value)}
           onBlur={(e) =>
             onUpdate({ manuscript_text: e.target.value || null })
           }
-          placeholder="Paste your sermon manuscript here. Worshippers can expand the sermon item to follow along."
+          placeholder="Paste your sermon manuscript here, or upload a .docx file above."
         />
+        {uploadError && (
+          <p className="text-xs text-red-600 mt-1">{uploadError}</p>
+        )}
+        {uploadNote && !uploadError && (
+          <p className="text-xs text-umc-700 mt-1">{uploadNote}</p>
+        )}
         <p className="text-xs text-gray-400 mt-1">
-          File upload (DOCX/PDF parsing) coming in a follow-up session.
+          Upload extracts plain text from the Word document. Bold,
+          italics, and other formatting are not preserved (they wouldn't
+          render in the worshipper view anyway). PDF support is coming
+          later — for now, save your PDF as Word first or paste the text.
         </p>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

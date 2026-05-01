@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase, withTimeout } from '../../../lib/supabase';
 import LoadingSpinner from '../../../components/LoadingSpinner.jsx';
 import SortableList, { DragHandle } from '../../../components/SortableList.jsx';
@@ -6,8 +6,18 @@ import SortableList, { DragHandle } from '../../../components/SortableList.jsx';
 const OTHER_BLOCK_TYPES = [
   { value: 'heading_body', label: 'Heading + body' },
   { value: 'personal_note', label: 'Personal note (signed)' },
-  // 'image_flyer' will be added once Supabase Storage bucket is set up.
+  { value: 'image_flyer', label: 'Image flyer' },
 ];
+
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
+
+function pathFromImageUrl(url) {
+  if (!url) return null;
+  const marker = '/object/public/bulletin-images/';
+  const idx = url.indexOf(marker);
+  if (idx < 0) return null;
+  return url.slice(idx + marker.length);
+}
 
 const otherTypeLabel = (t) =>
   OTHER_BLOCK_TYPES.find((b) => b.value === t)?.label ?? t;
@@ -301,9 +311,6 @@ export default function AnnouncementsOtherSection({ bulletin }) {
         <button type="button" onClick={addOtherBlock} className="btn-primary">
           + Add
         </button>
-        <span className="text-xs text-gray-400 ml-auto">
-          (Image flyers coming after image upload is set up.)
-        </span>
       </div>
 
       <SortableList
@@ -323,6 +330,73 @@ export default function AnnouncementsOtherSection({ bulletin }) {
 }
 
 function OtherBlockCard({ block, onUpdate, onRemove, dragHandleProps }) {
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState(null);
+  const imgInputRef = useRef(null);
+  const isFlyer = block.block_type === 'image_flyer';
+
+  const handleImageUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setUploadError('Please select an image file.');
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setUploadError(
+        `Image is too large (${Math.round(file.size / (1024 * 1024))} MB). Max is 10 MB.`
+      );
+      return;
+    }
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const path = `other-blocks/${block.id}-${Date.now()}.${ext}`;
+      const { error: upErr } = await withTimeout(
+        supabase.storage
+          .from('bulletin-images')
+          .upload(path, file, { cacheControl: '3600', upsert: false }),
+        30000
+      );
+      if (upErr) throw upErr;
+      const { data: urlData } = supabase.storage
+        .from('bulletin-images')
+        .getPublicUrl(path);
+      const publicUrl = urlData.publicUrl;
+      // Best-effort cleanup of any prior image
+      const oldPath = pathFromImageUrl(block.image_url);
+      if (oldPath) {
+        try {
+          await supabase.storage.from('bulletin-images').remove([oldPath]);
+        } catch {
+          /* orphan file is harmless */
+        }
+      }
+      await onUpdate({ image_url: publicUrl });
+    } catch (err) {
+      setUploadError(err?.message || String(err));
+    } finally {
+      setUploading(false);
+      if (imgInputRef.current) imgInputRef.current.value = '';
+    }
+  };
+
+  const removeImage = async () => {
+    if (!block.image_url) return;
+    if (!window.confirm('Remove this image?')) return;
+    setUploadError(null);
+    const oldPath = pathFromImageUrl(block.image_url);
+    try {
+      if (oldPath) {
+        await supabase.storage.from('bulletin-images').remove([oldPath]);
+      }
+      await onUpdate({ image_url: null });
+    } catch (err) {
+      setUploadError(err?.message || String(err));
+    }
+  };
+
   return (
     <div className="card space-y-3">
       <div className="flex items-center justify-between border-b border-gray-100 pb-2">
@@ -342,26 +416,98 @@ function OtherBlockCard({ block, onUpdate, onRemove, dragHandleProps }) {
       </div>
 
       <div>
-        <label className="label">Heading</label>
+        <label className="label">
+          {isFlyer ? 'Heading (optional)' : 'Heading'}
+        </label>
         <input
           type="text"
           className="input"
           defaultValue={block.heading ?? ''}
           onBlur={(e) => onUpdate({ heading: e.target.value || null })}
           placeholder={
-            block.block_type === 'personal_note' ? 'A note from Pastor Todd' : ''
+            block.block_type === 'personal_note'
+              ? 'A note from Pastor Todd'
+              : isFlyer
+                ? 'e.g., Bake Sale Saturday'
+                : ''
           }
         />
       </div>
 
-      <div>
-        <label className="label">Body</label>
-        <textarea
-          className="input min-h-[120px]"
-          defaultValue={block.body ?? ''}
-          onBlur={(e) => onUpdate({ body: e.target.value || null })}
-        />
-      </div>
+      {isFlyer ? (
+        <div>
+          <label className="label">Image</label>
+          {block.image_url ? (
+            <div className="space-y-2">
+              <img
+                src={block.image_url}
+                alt={block.heading ?? 'Flyer'}
+                className="max-h-72 rounded border border-gray-200"
+              />
+              <div className="flex gap-2">
+                <label className="btn-secondary text-sm cursor-pointer">
+                  {uploading ? 'Uploading…' : 'Replace image'}
+                  <input
+                    ref={imgInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleImageUpload}
+                    disabled={uploading}
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={removeImage}
+                  disabled={uploading}
+                  className="btn-secondary text-sm disabled:opacity-50"
+                >
+                  Remove image
+                </button>
+              </div>
+            </div>
+          ) : (
+            <label className="btn-secondary text-sm cursor-pointer inline-block">
+              {uploading ? 'Uploading…' : 'Upload an image'}
+              <input
+                ref={imgInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleImageUpload}
+                disabled={uploading}
+              />
+            </label>
+          )}
+          {uploadError && (
+            <p className="text-xs text-red-600 mt-1">{uploadError}</p>
+          )}
+          <p className="text-xs text-gray-500 mt-2">
+            JPG, PNG, or WebP. Max 10 MB. Stored in your Supabase project.
+          </p>
+        </div>
+      ) : (
+        <div>
+          <label className="label">Body</label>
+          <textarea
+            className="input min-h-[120px]"
+            defaultValue={block.body ?? ''}
+            onBlur={(e) => onUpdate({ body: e.target.value || null })}
+          />
+        </div>
+      )}
+
+      {isFlyer && (
+        <div>
+          <label className="label">Caption (optional)</label>
+          <textarea
+            className="input min-h-[60px]"
+            defaultValue={block.body ?? ''}
+            onBlur={(e) => onUpdate({ body: e.target.value || null })}
+            placeholder="Optional text shown below the image."
+          />
+        </div>
+      )}
 
       {block.block_type === 'personal_note' && (
         <div>

@@ -59,12 +59,40 @@ function fmtTime(hhmmss) {
   return `${hour12}:${mm} ${ampm}`;
 }
 
-export default function WelcomeCalendarSection() {
+export default function WelcomeCalendarSection({ bulletin, refresh }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Welcome blurb (read-only display from church_settings)
+  // Welcome blurb (church-wide default + per-bulletin override)
   const [welcomeBlurb, setWelcomeBlurb] = useState('');
+  const [bulletinBlurb, setBulletinBlurb] = useState(
+    bulletin?.welcome_blurb ?? ''
+  );
+  const [savingBlurb, setSavingBlurb] = useState(false);
+
+  useEffect(() => {
+    setBulletinBlurb(bulletin?.welcome_blurb ?? '');
+  }, [bulletin?.welcome_blurb]);
+
+  const saveBulletinBlurb = async (text) => {
+    if (!bulletin?.id) return;
+    setSavingBlurb(true);
+    setError(null);
+    try {
+      const { error: err } = await withTimeout(
+        supabase
+          .from('bulletins')
+          .update({ welcome_blurb: text.trim() || null })
+          .eq('id', bulletin.id)
+      );
+      if (err) throw err;
+      if (refresh) await refresh();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSavingBlurb(false);
+    }
+  };
 
   // Calendar events
   const [events, setEvents] = useState([]);
@@ -326,25 +354,46 @@ export default function WelcomeCalendarSection() {
       )}
 
       {/* WELCOME BLURB */}
-      <div className="card">
+      <div className="card space-y-3">
         <h3 className="font-serif text-lg text-umc-900">Welcome blurb</h3>
-        <p className="text-sm text-gray-600 mt-2 whitespace-pre-wrap">
-          {welcomeBlurb || (
-            <span className="italic text-gray-400">
-              No welcome blurb set. Add one in{' '}
-              <Link to="/admin/settings" className="text-umc-700 underline">
-                Settings
-              </Link>
-              .
-            </span>
+
+        <div>
+          <label className="label">This bulletin's welcome (optional)</label>
+          <textarea
+            className="input min-h-[120px]"
+            value={bulletinBlurb}
+            onChange={(e) => setBulletinBlurb(e.target.value)}
+            onBlur={(e) => saveBulletinBlurb(e.target.value)}
+            placeholder="Leave blank to use the church-wide default below. Override here for special Sundays (Easter, Christmas Eve, etc.)."
+          />
+          {savingBlurb && (
+            <p className="text-xs text-gray-500 mt-1">Saving…</p>
           )}
-        </p>
-        <p className="text-xs text-gray-400 mt-3">
-          The welcome blurb is set church-wide.{' '}
-          <Link to="/admin/settings" className="text-umc-700 underline">
-            Edit it in Settings →
-          </Link>
-        </p>
+        </div>
+
+        <div className="border-t border-gray-100 pt-3">
+          <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">
+            Church-wide default
+          </p>
+          <p className="text-sm text-gray-600 whitespace-pre-wrap">
+            {welcomeBlurb || (
+              <span className="italic text-gray-400">
+                No church-wide welcome blurb set. Add one in{' '}
+                <Link to="/admin/settings" className="text-umc-700 underline">
+                  Settings
+                </Link>
+                .
+              </span>
+            )}
+          </p>
+          <p className="text-xs text-gray-400 mt-2">
+            Worshippers see whichever you've set above, falling back to
+            this default when the override is empty.{' '}
+            <Link to="/admin/settings" className="text-umc-700 underline">
+              Edit the default →
+            </Link>
+          </p>
+        </div>
       </div>
 
       {/* CALENDAR EVENTS */}
