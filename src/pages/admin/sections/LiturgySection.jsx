@@ -1065,6 +1065,8 @@ function ScriptureFields({ item, onUpdate }) {
 }
 
 function SermonFields({ sermon, onUpdate, onPickSermon }) {
+  const { user } = useAuth();
+  const ownerUserId = user?.id;
   // sermon may be null until the user types something — the parent
   // lazy-creates the sermons row on first edit.
   const [manuscriptText, setManuscriptText] = useState(
@@ -1088,18 +1090,26 @@ function SermonFields({ sermon, onUpdate, onPickSermon }) {
   }, [sermon?.manuscript_text]);
 
   const loadPickerResults = async (q) => {
+    if (!ownerUserId) {
+      setPickerError('Not signed in.');
+      return;
+    }
     setPickerLoading(true);
     setPickerError(null);
     try {
+      // Scope to the current user's own sermons. Other staff sermons
+      // (incl. guest preachers' personal libraries) stay private until
+      // explicitly shared. We can layer in a "shared with WFUMC" flag
+      // later if guest preaching becomes routine.
       let query = supabase
         .from('sermons')
         .select(
           'id, title, scripture_reference, theme, original_sermon_number, preached_at'
         )
+        .eq('owner_user_id', ownerUserId)
         .order('preached_at', { ascending: false, nullsFirst: false })
         .limit(50);
       if (q) {
-        // Postgres "or" filter across title/scripture/theme
         const safe = q.replace(/[%,]/g, '');
         query = query.or(
           `title.ilike.%${safe}%,scripture_reference.ilike.%${safe}%,theme.ilike.%${safe}%`
