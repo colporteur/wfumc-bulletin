@@ -10,6 +10,7 @@ import LiturgySection from './sections/LiturgySection.jsx';
 import StewardshipSection from './sections/StewardshipSection.jsx';
 import CommunitySection from './sections/CommunitySection.jsx';
 import AnnouncementsOtherSection from './sections/AnnouncementsOtherSection.jsx';
+import ResponseSection from './sections/ResponseSection.jsx';
 
 const SECTIONS = [
   { key: 'cover', label: 'Cover', Component: CoverSection },
@@ -35,6 +36,7 @@ const SECTIONS = [
     label: 'Announcements & Other',
     Component: AnnouncementsOtherSection,
   },
+  { key: 'response', label: 'Response', Component: ResponseSection },
 ];
 
 const statusBadgeClass = {
