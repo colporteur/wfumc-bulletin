@@ -9,6 +9,7 @@ import {
 } from '../../../lib/importRefiner';
 import LoadingSpinner from '../../../components/LoadingSpinner.jsx';
 import SortableList, { DragHandle } from '../../../components/SortableList.jsx';
+import SuggestionsPanel from '../../../components/SuggestionsPanel.jsx';
 import { useAuth } from '../../../contexts/AuthContext.jsx';
 
 // =====================================================================
@@ -397,6 +398,13 @@ export default function LiturgySection({ bulletin }) {
           {error}
         </p>
       )}
+
+      {/* Phase 4: worship-team element suggestions */}
+      <SuggestionsPanel
+        bulletin={bulletin}
+        userId={user?.id}
+        onItemAdded={load}
+      />
 
       {items.length === 0 ? (
         <div className="card text-center space-y-3">
