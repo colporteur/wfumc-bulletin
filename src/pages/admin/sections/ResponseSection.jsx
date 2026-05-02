@@ -249,7 +249,7 @@ export default function ResponseSection({ bulletin }) {
               className="input min-h-[80px]"
               value={newText}
               onChange={(e) => setNewText(e.target.value)}
-              placeholder='e.g., "What did you find meaningful in this week\'s sermon?"'
+              placeholder={'e.g., "What did you find meaningful in this week\'s sermon?"'}
             />
             <div className="flex gap-2">
               <button
