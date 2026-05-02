@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase, withTimeout, callClaude } from '../../../lib/supabase';
 import { prepareImageForUpload, blobToBase64 } from '../../../lib/imageHelpers';
+import { parseLiturgyDocx, suggestMatches } from '../../../lib/liturgyDocx';
 import LoadingSpinner from '../../../components/LoadingSpinner.jsx';
 import SortableList, { DragHandle } from '../../../components/SortableList.jsx';
 import { useAuth } from '../../../contexts/AuthContext.jsx';
@@ -91,6 +92,7 @@ export default function LiturgySection({ bulletin }) {
   const [expandedId, setExpandedId] = useState(null);
   const [addType, setAddType] = useState('generic');
   const [seeding, setSeeding] = useState(false);
+  const [showImport, setShowImport] = useState(false);
 
   const load = async () => {
     if (!bulletinId) return;
@@ -352,14 +354,26 @@ export default function LiturgySection({ bulletin }) {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="font-serif text-xl text-umc-900">Order of Worship</h2>
-        <p className="text-sm text-gray-600 mt-1">
-          The full liturgy. Click any item to expand and edit its details.
-          Drag the <span className="font-mono">⋮⋮</span> handle to reorder.
-          Items with a <span className="font-semibold">*</span> are "stand if
-          able".
-        </p>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="font-serif text-xl text-umc-900">Order of Worship</h2>
+          <p className="text-sm text-gray-600 mt-1">
+            The full liturgy. Click any item to expand and edit its details.
+            Drag the <span className="font-mono">⋮⋮</span> handle to reorder.
+            Items with a <span className="font-semibold">*</span> are "stand
+            if able".
+          </p>
+        </div>
+        {items.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowImport(true)}
+            className="btn-secondary text-sm whitespace-nowrap"
+            title="Import a liturgy .docx and auto-fill the matching item bodies"
+          >
+            📄 Import liturgy from .docx
+          </button>
+        )}
       </div>
 
       {error && (
@@ -430,6 +444,18 @@ export default function LiturgySection({ bulletin }) {
             + Add
           </button>
         </div>
+      )}
+
+      {showImport && (
+        <LiturgyImportModal
+          bulletin={bulletin}
+          items={items}
+          onClose={() => setShowImport(false)}
+          onApplied={async () => {
+            await load();
+            setShowImport(false);
+          }}
+        />
       )}
     </div>
   );
@@ -1420,6 +1446,398 @@ function ExpandableFields({ item, onUpdate }) {
           }
           placeholder="Hidden by default; worshippers tap to expand. Use for full hymn lyrics, prayer text, etc."
         />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Liturgy import modal
+// ---------------------------------------------------------------------
+//
+// Pastor's typical workflow: write the full liturgy in a .docx file
+// each week, then transcribe pieces into the bulletin. This modal
+// short-circuits the transcription:
+//
+//   1. Drop the .docx
+//   2. We parse it into sections (heading + body) and suggest which
+//      bulletin liturgy_item each section maps to
+//   3. The pastor reviews per-row, can change the matched item or skip
+//   4. Apply: each matched item's expanded_detail gets the body text;
+//      the FULL liturgy text also gets stored on the linked sermon's
+//      preaching record (so it shows up on the sermon detail page in
+//      the Sermon Archive)
+
+function LiturgyImportModal({ bulletin, items, onClose, onApplied }) {
+  const [phase, setPhase] = useState('pick'); // pick | preview | applying | done
+  const [parsing, setParsing] = useState(false);
+  const [error, setError] = useState(null);
+  const [sourceFilename, setSourceFilename] = useState(null);
+  const [fullText, setFullText] = useState('');
+  const [matches, setMatches] = useState([]); // [{section, suggestedItem, score, alternates}]
+  // Per-row UI state — keyed by section index. {selectedItemId, skip}
+  const [rowState, setRowState] = useState({});
+  const [saveToSermon, setSaveToSermon] = useState(true);
+  const [applying, setApplying] = useState(false);
+  const [results, setResults] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setError(null);
+    setParsing(true);
+    try {
+      const parsed = await parseLiturgyDocx(file);
+      if (!parsed.sections.length) {
+        setError(
+          "Couldn't find any section headings in that .docx. Make sure each section " +
+            '(Call to Worship, Pastoral Prayer, etc.) is on its own line.'
+        );
+        return;
+      }
+      const m = suggestMatches(parsed.sections, items);
+      const initial = {};
+      m.forEach((row, idx) => {
+        initial[idx] = {
+          selectedItemId: row.suggestedItem?.id ?? '',
+          skip: !row.suggestedItem, // unmatched rows default to skip
+        };
+      });
+      setSourceFilename(file.name);
+      setFullText(parsed.fullText);
+      setMatches(m);
+      setRowState(initial);
+      setPhase('preview');
+    } catch (e2) {
+      setError(e2.message || String(e2));
+    } finally {
+      setParsing(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const updateRow = (idx, patch) => {
+    setRowState((prev) => ({ ...prev, [idx]: { ...prev[idx], ...patch } }));
+  };
+
+  const apply = async () => {
+    setApplying(true);
+    setPhase('applying');
+    setError(null);
+    const errors = [];
+    let updatedItems = 0;
+
+    // 1. Update each selected liturgy_item's expanded_detail with the
+    //    section body. Skipped rows are ignored.
+    for (let idx = 0; idx < matches.length; idx++) {
+      const row = rowState[idx];
+      if (!row || row.skip || !row.selectedItemId) continue;
+      const section = matches[idx].section;
+      try {
+        const { error: err } = await withTimeout(
+          supabase
+            .from('liturgy_items')
+            .update({ expanded_detail: section.body || null })
+            .eq('id', row.selectedItemId)
+        );
+        if (err) throw err;
+        updatedItems += 1;
+      } catch (e) {
+        errors.push(`"${section.heading}": ${e.message || String(e)}`);
+      }
+    }
+
+    // 2. Save full text to the linked sermon's preaching for this
+    //    bulletin (so it surfaces in the Sermon Archive at the right
+    //    date+location).
+    let updatedPreachings = 0;
+    if (saveToSermon) {
+      // Find sermon ids attached to any liturgy item in this bulletin.
+      const sermonIds = Array.from(
+        new Set(items.map((it) => it.sermon_id).filter(Boolean))
+      );
+      for (const sermonId of sermonIds) {
+        try {
+          // Find the preaching for (this sermon, this bulletin). It
+          // should already exist since linking a sermon auto-creates
+          // a preaching. If for some reason it doesn't, skip.
+          const { data: pr } = await withTimeout(
+            supabase
+              .from('preachings')
+              .select('id')
+              .eq('sermon_id', sermonId)
+              .eq('bulletin_id', bulletin.id)
+              .maybeSingle()
+          );
+          if (!pr) continue;
+          const { error: err } = await withTimeout(
+            supabase
+              .from('preachings')
+              .update({
+                liturgy_text: fullText || null,
+                liturgy_source_filename: sourceFilename || null,
+              })
+              .eq('id', pr.id)
+          );
+          if (err) throw err;
+          updatedPreachings += 1;
+        } catch (e) {
+          errors.push(`Saving liturgy to sermon: ${e.message || String(e)}`);
+        }
+      }
+    }
+
+    setResults({ updatedItems, updatedPreachings, errors });
+    setApplying(false);
+    setPhase('done');
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-40 bg-black/50 flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !applying) onClose();
+      }}
+    >
+      <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full my-4">
+        <div className="p-4 sm:p-6 space-y-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="font-serif text-xl text-umc-900">
+                Import liturgy from .docx
+              </h2>
+              <p className="text-xs text-gray-500 mt-1">
+                Drop your weekly liturgy doc and we'll match each section
+                ("Call to Worship", "Congregational Prayer", etc.) to an item
+                in this bulletin's Order of Worship. You review and confirm
+                before anything is written.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={applying}
+              className="text-gray-400 hover:text-gray-700 text-2xl leading-none disabled:opacity-30"
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </div>
+
+          {error && (
+            <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
+              {error}
+            </p>
+          )}
+
+          {phase === 'pick' && (
+            <div className="text-center py-10 space-y-3 border-2 border-dashed border-gray-300 rounded">
+              <p className="text-sm text-gray-600">
+                Pick a .docx file with your liturgy.
+              </p>
+              <label
+                className={`btn-primary inline-block cursor-pointer ${
+                  parsing ? 'opacity-50 pointer-events-none' : ''
+                }`}
+              >
+                {parsing ? 'Parsing…' : '📄 Choose .docx file'}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                  onChange={handleFile}
+                  disabled={parsing}
+                />
+              </label>
+            </div>
+          )}
+
+          {phase === 'preview' && (
+            <>
+              <p className="text-xs text-gray-500">
+                {matches.length} section{matches.length === 1 ? '' : 's'}{' '}
+                found in <span className="font-mono">{sourceFilename}</span>.
+                Adjust the matches below — anything you don't want imported,
+                check "skip".
+              </p>
+
+              <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+                {matches.map((m, idx) => {
+                  const row = rowState[idx] || {};
+                  const target = items.find((it) => it.id === row.selectedItemId);
+                  return (
+                    <div
+                      key={idx}
+                      className={`border rounded p-3 ${
+                        row.skip
+                          ? 'border-gray-200 bg-gray-50 opacity-60'
+                          : 'border-umc-200 bg-white'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-umc-900">
+                            {m.section.heading}
+                            {m.score >= 80 && !row.skip && (
+                              <span className="ml-2 text-[10px] uppercase tracking-wide text-green-700">
+                                auto-matched
+                              </span>
+                            )}
+                            {m.score > 0 && m.score < 80 && !row.skip && (
+                              <span className="ml-2 text-[10px] uppercase tracking-wide text-amber-700">
+                                fuzzy match
+                              </span>
+                            )}
+                            {m.score === 0 && (
+                              <span className="ml-2 text-[10px] uppercase tracking-wide text-red-700">
+                                no match
+                              </span>
+                            )}
+                          </p>
+                          <div className="mt-1 flex items-center gap-2">
+                            <label className="text-xs text-gray-600">
+                              → fill into:
+                            </label>
+                            <select
+                              className="text-xs border border-gray-300 rounded px-2 py-0.5 flex-1"
+                              value={row.selectedItemId ?? ''}
+                              onChange={(e) =>
+                                updateRow(idx, {
+                                  selectedItemId: e.target.value,
+                                  skip: !e.target.value,
+                                })
+                              }
+                              disabled={row.skip}
+                            >
+                              <option value="">— select item —</option>
+                              {items.map((it) => (
+                                <option key={it.id} value={it.id}>
+                                  {it.title || '(untitled)'}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          {target?.expanded_detail && !row.skip && (
+                            <p className="text-[10px] text-amber-700 mt-1">
+                              ⚠️ This will replace existing text on "{target.title}".
+                            </p>
+                          )}
+                          <details className="mt-2">
+                            <summary className="text-xs text-gray-500 cursor-pointer">
+                              Body preview ({m.section.body.length} chars)
+                            </summary>
+                            <p className="text-xs text-gray-700 whitespace-pre-wrap mt-1 max-h-32 overflow-y-auto bg-gray-50 p-2 rounded">
+                              {m.section.body || '(empty)'}
+                            </p>
+                          </details>
+                        </div>
+                        <label className="flex items-center gap-1 text-xs text-gray-600 cursor-pointer shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={!!row.skip}
+                            onChange={(e) =>
+                              updateRow(idx, { skip: e.target.checked })
+                            }
+                            className="h-4 w-4 rounded border-gray-300 text-umc-700"
+                          />
+                          skip
+                        </label>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="border-t border-gray-100 pt-3 space-y-2">
+                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={saveToSermon}
+                    onChange={(e) => setSaveToSermon(e.target.checked)}
+                    className="h-4 w-4 rounded border-gray-300 text-umc-700"
+                  />
+                  <span>
+                    Also save the full liturgy text to the linked sermon's
+                    preaching record
+                    <span className="block text-[10px] text-gray-500 leading-tight">
+                      So the liturgy shows on the sermon detail page in the
+                      Sermon Archive at this date + location.
+                    </span>
+                  </span>
+                </label>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="btn-secondary"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={apply}
+                  className="btn-primary"
+                >
+                  Apply{' '}
+                  {Object.values(rowState).filter((r) => !r.skip).length} change
+                  {Object.values(rowState).filter((r) => !r.skip).length === 1
+                    ? ''
+                    : 's'}
+                </button>
+              </div>
+            </>
+          )}
+
+          {phase === 'applying' && (
+            <div className="text-center py-10 text-sm text-gray-600">
+              Applying changes…
+            </div>
+          )}
+
+          {phase === 'done' && results && (
+            <div className="space-y-3">
+              <p className="text-sm text-umc-900">
+                Done. Updated <strong>{results.updatedItems}</strong> liturgy
+                item{results.updatedItems === 1 ? '' : 's'}.
+                {results.updatedPreachings > 0 && (
+                  <>
+                    {' '}
+                    Saved liturgy text to{' '}
+                    <strong>{results.updatedPreachings}</strong> sermon
+                    preaching record
+                    {results.updatedPreachings === 1 ? '' : 's'}.
+                  </>
+                )}
+              </p>
+              {results.errors.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-red-700">
+                    {results.errors.length} error
+                    {results.errors.length === 1 ? '' : 's'}
+                  </summary>
+                  <ul className="mt-2 space-y-1 font-mono text-red-600">
+                    {results.errors.map((e, i) => (
+                      <li key={i}>{e}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={onApplied}
+                  className="btn-primary"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
