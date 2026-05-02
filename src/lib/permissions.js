@@ -21,6 +21,7 @@ export const ROLE_LABELS = {
   music_director: 'Music Director',
   treasurer: 'Treasurer',
   social_media: 'Social Media Team',
+  worship_team: 'Worship Team',
   pianist: 'Pianist',
   staff: 'Staff',
 };
@@ -35,11 +36,13 @@ const SECTIONS_BY_ROLE = {
   music_director: ['liturgy'],
   treasurer: ['stewardship'],
   social_media: [], // no bulletin-admin sections
+  worship_team: [], // no bulletin admin; their workspace is the Worship app
 };
 
 export function canSeeBulletinAdmin(role) {
   if (!role) return false;
   if (role === 'social_media') return false;
+  if (role === 'worship_team') return false;
   return true;
 }
 
@@ -71,6 +74,7 @@ export function rolesForUserManagement() {
     'music_director',
     'treasurer',
     'social_media',
+    'worship_team',
     'pianist',
     'staff',
   ];
