@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { supabase, withTimeout, callClaude } from '../../../lib/supabase';
 import { prepareImageForUpload, blobToBase64 } from '../../../lib/imageHelpers';
 import { parseLiturgyDocx, suggestMatches } from '../../../lib/liturgyDocx';
+import { parseMusicDocx, suggestMusicMatches } from '../../../lib/musicDocx';
 import LoadingSpinner from '../../../components/LoadingSpinner.jsx';
 import SortableList, { DragHandle } from '../../../components/SortableList.jsx';
 import { useAuth } from '../../../contexts/AuthContext.jsx';
@@ -93,6 +94,7 @@ export default function LiturgySection({ bulletin }) {
   const [addType, setAddType] = useState('generic');
   const [seeding, setSeeding] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showMusicImport, setShowMusicImport] = useState(false);
 
   const load = async () => {
     if (!bulletinId) return;
@@ -365,14 +367,24 @@ export default function LiturgySection({ bulletin }) {
           </p>
         </div>
         {items.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setShowImport(true)}
-            className="btn-secondary text-sm whitespace-nowrap"
-            title="Import a liturgy .docx and auto-fill the matching item bodies"
-          >
-            📄 Import liturgy from .docx
-          </button>
+          <div className="flex gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setShowImport(true)}
+              className="btn-secondary text-sm whitespace-nowrap"
+              title="Import a liturgy .docx and auto-fill the matching item bodies"
+            >
+              📄 Import liturgy
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowMusicImport(true)}
+              className="btn-secondary text-sm whitespace-nowrap"
+              title="Import the music director's weekly .docx — fills in hymns, prelude, anthem, etc."
+            >
+              🎵 Import music
+            </button>
+          </div>
         )}
       </div>
 
@@ -454,6 +466,18 @@ export default function LiturgySection({ bulletin }) {
           onApplied={async () => {
             await load();
             setShowImport(false);
+          }}
+        />
+      )}
+
+      {showMusicImport && (
+        <MusicImportModal
+          bulletin={bulletin}
+          items={items}
+          onClose={() => setShowMusicImport(false)}
+          onApplied={async () => {
+            await load();
+            setShowMusicImport(false);
           }}
         />
       )}
@@ -1502,6 +1526,7 @@ function LiturgyImportModal({ bulletin, items, onClose, onApplied }) {
         initial[idx] = {
           selectedItemId: row.suggestedItem?.id ?? '',
           skip: !row.suggestedItem, // unmatched rows default to skip
+          mode: 'overwrite', // 'overwrite' replaces; 'append' concatenates
         };
       });
       setSourceFilename(file.name);
@@ -1529,16 +1554,34 @@ function LiturgyImportModal({ bulletin, items, onClose, onApplied }) {
     let updatedItems = 0;
 
     // 1. Update each selected liturgy_item's expanded_detail with the
-    //    section body. Skipped rows are ignored.
+    //    section body. Skipped rows are ignored. Mode 'append' adds to
+    //    the item's CURRENT expanded_detail (re-fetched so we don't
+    //    clobber a prior row in the same import that wrote to the
+    //    same item).
     for (let idx = 0; idx < matches.length; idx++) {
       const row = rowState[idx];
       if (!row || row.skip || !row.selectedItemId) continue;
       const section = matches[idx].section;
       try {
+        let newBody = section.body || '';
+        if (row.mode === 'append') {
+          const { data: cur, error: getErr } = await withTimeout(
+            supabase
+              .from('liturgy_items')
+              .select('expanded_detail')
+              .eq('id', row.selectedItemId)
+              .single()
+          );
+          if (getErr) throw getErr;
+          const existing = (cur?.expanded_detail || '').trim();
+          newBody = existing
+            ? `${existing}\n\n${newBody}`.trim()
+            : newBody;
+        }
         const { error: err } = await withTimeout(
           supabase
             .from('liturgy_items')
-            .update({ expanded_detail: section.body || null })
+            .update({ expanded_detail: newBody || null })
             .eq('id', row.selectedItemId)
         );
         if (err) throw err;
@@ -1720,9 +1763,48 @@ function LiturgyImportModal({ bulletin, items, onClose, onApplied }) {
                             </select>
                           </div>
                           {target?.expanded_detail && !row.skip && (
-                            <p className="text-[10px] text-amber-700 mt-1">
-                              ⚠️ This will replace existing text on "{target.title}".
+                            <p
+                              className={`text-[10px] mt-1 ${
+                                row.mode === 'append'
+                                  ? 'text-gray-500'
+                                  : 'text-amber-700'
+                              }`}
+                            >
+                              {row.mode === 'append'
+                                ? `↳ Will append to "${target.title}" (keeps existing text).`
+                                : `⚠️ Will replace existing text on "${target.title}".`}
                             </p>
+                          )}
+                          {!row.skip && (
+                            <div className="mt-1 flex items-center gap-2">
+                              <span className="text-[10px] text-gray-500">
+                                Mode:
+                              </span>
+                              <label className="text-[10px] text-gray-700 cursor-pointer flex items-center gap-1">
+                                <input
+                                  type="radio"
+                                  name={`mode-${idx}`}
+                                  checked={row.mode === 'overwrite'}
+                                  onChange={() =>
+                                    updateRow(idx, { mode: 'overwrite' })
+                                  }
+                                  className="h-3 w-3"
+                                />
+                                Overwrite
+                              </label>
+                              <label className="text-[10px] text-gray-700 cursor-pointer flex items-center gap-1">
+                                <input
+                                  type="radio"
+                                  name={`mode-${idx}`}
+                                  checked={row.mode === 'append'}
+                                  onChange={() =>
+                                    updateRow(idx, { mode: 'append' })
+                                  }
+                                  className="h-3 w-3"
+                                />
+                                Append
+                              </label>
+                            </div>
                           )}
                           <details className="mt-2">
                             <summary className="text-xs text-gray-500 cursor-pointer">
@@ -1841,4 +1923,479 @@ function LiturgyImportModal({ bulletin, items, onClose, onApplied }) {
       </div>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------
+// Music import modal
+// ---------------------------------------------------------------------
+//
+// Pastor Todd's music director provides a weekly .docx with:
+//   - Single-line music items (Prelude, Offertory, Anthem, etc.)
+//   - A "Hymns:" block with one hymn per line: "UMH #545 ... (TUNE)"
+//   - One or more "HYMN BIO…" blocks with bio paragraphs
+//
+// The modal parses these into typed rows and lets the user confirm
+// matches per row. Different row kinds write to different fields:
+//   - music_item → fills inline_body
+//   - hymn       → patches hymnal_source / hymn_number / hymn_title /
+//                  tune_name on the matched hymn slot (in order)
+//   - hymn_bio   → fills hymn_bio + (default) APPENDS to expanded_detail
+//
+// Default mode is "overwrite" since the music doc usually replaces
+// stale values from last week. Hymn bios default to "append" because
+// expanded_detail often holds other commentary that shouldn't be lost.
+
+function MusicImportModal({ bulletin, items, onClose, onApplied }) {
+  const [phase, setPhase] = useState('pick'); // pick | preview | applying | done
+  const [parsing, setParsing] = useState(false);
+  const [error, setError] = useState(null);
+  const [rows, setRows] = useState([]); // enriched rows (with suggestedItem)
+  const [rowState, setRowState] = useState({});
+  const [applying, setApplying] = useState(false);
+  const [results, setResults] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setError(null);
+    setParsing(true);
+    try {
+      const parsed = await parseMusicDocx(file);
+      if (!parsed.rows.length) {
+        setError(
+          "Couldn't find any music items, hymns, or bios in that .docx. " +
+            'Make sure each line uses one of the recognized formats ' +
+            '(e.g., "Prelude: ...", "UMH #123 Hymn Title (TUNE)", "HYMN BIO… ...").'
+        );
+        return;
+      }
+      const enriched = suggestMusicMatches(parsed.rows, items);
+      const initial = {};
+      enriched.forEach((row, idx) => {
+        initial[idx] = {
+          selectedItemId: row.suggestedItem?.id ?? '',
+          skip: !row.suggestedItem,
+          // bios default to append; everything else defaults to overwrite
+          mode: row.kind === 'hymn_bio' ? 'append' : 'overwrite',
+        };
+      });
+      setRows(enriched);
+      setRowState(initial);
+      setPhase('preview');
+    } catch (e2) {
+      setError(e2.message || String(e2));
+    } finally {
+      setParsing(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const updateRow = (idx, patch) => {
+    setRowState((prev) => ({ ...prev, [idx]: { ...prev[idx], ...patch } }));
+  };
+
+  const apply = async () => {
+    setApplying(true);
+    setPhase('applying');
+    setError(null);
+    const errors = [];
+    let updatedItems = 0;
+
+    for (let idx = 0; idx < rows.length; idx++) {
+      const row = rows[idx];
+      const state = rowState[idx];
+      if (!state || state.skip || !state.selectedItemId) continue;
+
+      try {
+        const update = {};
+        let needsExisting = false;
+
+        if (row.kind === 'music_item') {
+          // Always replace inline_body if overwrite; concatenate if append.
+          if (state.mode === 'append') needsExisting = true;
+          else update.inline_body = row.body || null;
+        } else if (row.kind === 'hymn') {
+          // Hymn fields are structured; always replace (no append concept).
+          update.hymnal_source = row.hymnal_source || null;
+          update.hymn_number = row.hymn_number || null;
+          update.hymn_title = row.hymn_title || null;
+          update.tune_name = row.tune_name || null;
+        } else if (row.kind === 'hymn_bio') {
+          // Always overwrite hymn_bio; append/overwrite controls
+          // expanded_detail behavior.
+          update.hymn_bio = row.body || null;
+          if (state.mode === 'append') needsExisting = true;
+          else update.expanded_detail = row.body || null;
+        }
+
+        if (needsExisting) {
+          // For append modes we need the current value to concatenate.
+          const { data: cur, error: getErr } = await withTimeout(
+            supabase
+              .from('liturgy_items')
+              .select('inline_body, expanded_detail')
+              .eq('id', state.selectedItemId)
+              .single()
+          );
+          if (getErr) throw getErr;
+          if (row.kind === 'music_item') {
+            const existing = (cur?.inline_body || '').trim();
+            update.inline_body = existing
+              ? `${existing}\n\n${row.body || ''}`.trim()
+              : row.body || null;
+          } else if (row.kind === 'hymn_bio') {
+            const existing = (cur?.expanded_detail || '').trim();
+            update.expanded_detail = existing
+              ? `${existing}\n\n${row.body || ''}`.trim()
+              : row.body || null;
+          }
+        }
+
+        const { error: err } = await withTimeout(
+          supabase
+            .from('liturgy_items')
+            .update(update)
+            .eq('id', state.selectedItemId)
+        );
+        if (err) throw err;
+        updatedItems += 1;
+      } catch (e) {
+        errors.push(`${rowLabel(row)}: ${e.message || String(e)}`);
+      }
+    }
+
+    setResults({ updatedItems, errors });
+    setApplying(false);
+    setPhase('done');
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-40 bg-black/50 flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !applying) onClose();
+      }}
+    >
+      <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full my-4">
+        <div className="p-4 sm:p-6 space-y-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="font-serif text-xl text-umc-900">
+                Import music from .docx
+              </h2>
+              <p className="text-xs text-gray-500 mt-1">
+                Drop the music director's weekly file. We'll fill in
+                Prelude / Offertory / Anthem, parse each hymn line into
+                its bulletin slot (in order), and append any "HYMN BIO…"
+                paragraphs into the matching hymn's expanded section.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={applying}
+              className="text-gray-400 hover:text-gray-700 text-2xl leading-none disabled:opacity-30"
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </div>
+
+          {error && (
+            <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
+              {error}
+            </p>
+          )}
+
+          {phase === 'pick' && (
+            <div className="text-center py-10 space-y-3 border-2 border-dashed border-gray-300 rounded">
+              <p className="text-sm text-gray-600">
+                Pick the music .docx file.
+              </p>
+              <label
+                className={`btn-primary inline-block cursor-pointer ${
+                  parsing ? 'opacity-50 pointer-events-none' : ''
+                }`}
+              >
+                {parsing ? 'Parsing…' : '🎵 Choose .docx file'}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                  onChange={handleFile}
+                  disabled={parsing}
+                />
+              </label>
+            </div>
+          )}
+
+          {phase === 'preview' && (
+            <>
+              <p className="text-xs text-gray-500">
+                {rows.length} item{rows.length === 1 ? '' : 's'} parsed.
+                Defaults: overwrite for music items + hymn fields, append
+                for hymn bios. Adjust per row as needed.
+              </p>
+
+              <div className="space-y-2 max-h-[55vh] overflow-y-auto pr-1">
+                {rows.map((row, idx) => {
+                  const state = rowState[idx] || {};
+                  const target = items.find((it) => it.id === state.selectedItemId);
+                  return (
+                    <div
+                      key={idx}
+                      className={`border rounded p-3 ${
+                        state.skip
+                          ? 'border-gray-200 bg-gray-50 opacity-60'
+                          : 'border-umc-200 bg-white'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <RowHeader row={row} score={row.score ?? 0} skip={state.skip} />
+
+                          <div className="flex items-center gap-2">
+                            <label className="text-xs text-gray-600">
+                              → fill into:
+                            </label>
+                            <select
+                              className="text-xs border border-gray-300 rounded px-2 py-0.5 flex-1"
+                              value={state.selectedItemId ?? ''}
+                              onChange={(e) =>
+                                updateRow(idx, {
+                                  selectedItemId: e.target.value,
+                                  skip: !e.target.value,
+                                })
+                              }
+                              disabled={state.skip}
+                            >
+                              <option value="">— select item —</option>
+                              {items.map((it) => (
+                                <option key={it.id} value={it.id}>
+                                  {it.title || '(untitled)'}
+                                  {it.item_type === 'hymn' && ' (hymn)'}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {/* Append/overwrite toggle — only meaningful for
+                              text-field rows (music_item, hymn_bio). For
+                              hymn rows the structured fields always replace. */}
+                          {!state.skip && row.kind !== 'hymn' && (
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] text-gray-500">
+                                {row.kind === 'hymn_bio'
+                                  ? 'Expanded section:'
+                                  : 'Inline text:'}
+                              </span>
+                              <label className="text-[10px] text-gray-700 cursor-pointer flex items-center gap-1">
+                                <input
+                                  type="radio"
+                                  name={`mmode-${idx}`}
+                                  checked={state.mode === 'overwrite'}
+                                  onChange={() =>
+                                    updateRow(idx, { mode: 'overwrite' })
+                                  }
+                                  className="h-3 w-3"
+                                />
+                                Overwrite
+                              </label>
+                              <label className="text-[10px] text-gray-700 cursor-pointer flex items-center gap-1">
+                                <input
+                                  type="radio"
+                                  name={`mmode-${idx}`}
+                                  checked={state.mode === 'append'}
+                                  onChange={() =>
+                                    updateRow(idx, { mode: 'append' })
+                                  }
+                                  className="h-3 w-3"
+                                />
+                                Append
+                              </label>
+                            </div>
+                          )}
+
+                          {!state.skip && target && (
+                            <RowDestinationSummary row={row} target={target} mode={state.mode} />
+                          )}
+
+                          <details className="mt-1">
+                            <summary className="text-xs text-gray-500 cursor-pointer">
+                              Source preview
+                            </summary>
+                            <RowSourcePreview row={row} />
+                          </details>
+                        </div>
+                        <label className="flex items-center gap-1 text-xs text-gray-600 cursor-pointer shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={!!state.skip}
+                            onChange={(e) =>
+                              updateRow(idx, { skip: e.target.checked })
+                            }
+                            className="h-4 w-4 rounded border-gray-300 text-umc-700"
+                          />
+                          skip
+                        </label>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button type="button" onClick={onClose} className="btn-secondary">
+                  Cancel
+                </button>
+                <button type="button" onClick={apply} className="btn-primary">
+                  Apply{' '}
+                  {Object.values(rowState).filter((r) => !r.skip).length} change
+                  {Object.values(rowState).filter((r) => !r.skip).length === 1
+                    ? ''
+                    : 's'}
+                </button>
+              </div>
+            </>
+          )}
+
+          {phase === 'applying' && (
+            <div className="text-center py-10 text-sm text-gray-600">
+              Applying changes…
+            </div>
+          )}
+
+          {phase === 'done' && results && (
+            <div className="space-y-3">
+              <p className="text-sm text-umc-900">
+                Done. Updated <strong>{results.updatedItems}</strong> liturgy
+                item{results.updatedItems === 1 ? '' : 's'}.
+              </p>
+              {results.errors.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-red-700">
+                    {results.errors.length} error
+                    {results.errors.length === 1 ? '' : 's'}
+                  </summary>
+                  <ul className="mt-2 space-y-1 font-mono text-red-600">
+                    {results.errors.map((e, i) => (
+                      <li key={i}>{e}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+              <div className="flex justify-end">
+                <button type="button" onClick={onApplied} className="btn-primary">
+                  Close
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Tiny helpers for the music modal — keep the row rendering tidy.
+
+function rowLabel(row) {
+  if (row.kind === 'music_item') return row.label;
+  if (row.kind === 'hymn')
+    return `${row.hymnal_source} #${row.hymn_number} ${row.hymn_title}`;
+  if (row.kind === 'hymn_bio') return `Bio: ${row.hymn_title}`;
+  return 'Unknown';
+}
+
+function RowHeader({ row, score, skip }) {
+  const KIND = {
+    music_item: { label: 'Music', cls: 'bg-blue-100 text-blue-800' },
+    hymn: { label: 'Hymn', cls: 'bg-purple-100 text-purple-800' },
+    hymn_bio: { label: 'Hymn bio', cls: 'bg-amber-100 text-amber-800' },
+  };
+  const k = KIND[row.kind] ?? KIND.music_item;
+  return (
+    <div className="flex items-baseline gap-2 flex-wrap">
+      <span
+        className={`px-2 py-0.5 text-[10px] uppercase tracking-wide rounded ${k.cls}`}
+      >
+        {k.label}
+      </span>
+      <span className="text-sm font-medium text-umc-900">{rowLabel(row)}</span>
+      {score >= 80 && !skip && (
+        <span className="text-[10px] uppercase tracking-wide text-green-700">
+          auto-matched
+        </span>
+      )}
+      {score > 0 && score < 80 && !skip && (
+        <span className="text-[10px] uppercase tracking-wide text-amber-700">
+          fuzzy match
+        </span>
+      )}
+      {score === 0 && (
+        <span className="text-[10px] uppercase tracking-wide text-red-700">
+          no match
+        </span>
+      )}
+    </div>
+  );
+}
+
+function RowDestinationSummary({ row, target, mode }) {
+  if (row.kind === 'hymn') {
+    return (
+      <p className="text-[10px] text-gray-500">
+        ↳ Sets <span className="font-mono">hymnal_source</span>,{' '}
+        <span className="font-mono">hymn_number</span>,{' '}
+        <span className="font-mono">hymn_title</span>,{' '}
+        <span className="font-mono">tune_name</span> on "{target.title}".
+      </p>
+    );
+  }
+  const fieldName =
+    row.kind === 'music_item' ? 'inline body' : 'expanded section';
+  const existing =
+    row.kind === 'music_item' ? target.inline_body : target.expanded_detail;
+  return (
+    <p
+      className={`text-[10px] ${
+        existing && mode === 'overwrite' ? 'text-amber-700' : 'text-gray-500'
+      }`}
+    >
+      ↳{' '}
+      {existing
+        ? mode === 'append'
+          ? `Will append to ${fieldName} of "${target.title}".`
+          : `⚠️ Will replace ${fieldName} of "${target.title}".`
+        : `Will fill ${fieldName} of "${target.title}".`}
+    </p>
+  );
+}
+
+function RowSourcePreview({ row }) {
+  if (row.kind === 'music_item') {
+    return (
+      <p className="text-xs text-gray-700 mt-1 bg-gray-50 p-2 rounded">
+        {row.body || '(empty)'}
+      </p>
+    );
+  }
+  if (row.kind === 'hymn') {
+    return (
+      <p className="text-xs text-gray-700 mt-1 bg-gray-50 p-2 rounded font-mono">
+        {row.hymnal_source} #{row.hymn_number} — {row.hymn_title}
+        {row.tune_name && ` (${row.tune_name})`}
+      </p>
+    );
+  }
+  if (row.kind === 'hymn_bio') {
+    return (
+      <p className="text-xs text-gray-700 mt-1 bg-gray-50 p-2 rounded whitespace-pre-wrap max-h-32 overflow-y-auto">
+        {row.body || '(empty)'}
+      </p>
+    );
+  }
+  return null;
 }
