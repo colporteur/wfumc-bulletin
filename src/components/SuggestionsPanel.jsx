@@ -271,17 +271,19 @@ function SuggestionRow({
               >
                 {busy ? '…' : '+ Add to liturgy'}
               </button>
-              {hasLiturgyItems && (
-                <button
-                  type="button"
-                  onClick={onSmartAdd}
-                  disabled={busy}
-                  className="text-xs btn-secondary py-0.5 px-2 disabled:opacity-50"
-                  title="Use Claude to fill an existing liturgy item with this suggestion's content"
-                >
-                  ✨ Smart Add
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={onSmartAdd}
+                disabled={busy || !hasLiturgyItems}
+                className="text-xs btn-secondary py-0.5 px-2 disabled:opacity-50"
+                title={
+                  hasLiturgyItems
+                    ? "Use Claude to fill an existing liturgy item with this suggestion's content"
+                    : 'Add liturgy items first to use Smart Add'
+                }
+              >
+                ✨ Smart Add
+              </button>
             </>
           )}
         </div>
