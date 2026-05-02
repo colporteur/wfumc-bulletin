@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import { supabase, withTimeout } from '../lib/supabase';
 import { prepareImageForUpload } from '../lib/imageHelpers';
+import HighlightShare from '../components/HighlightShare.jsx';
 
 const PRAYER_TEXT_LIMIT = 60;
 const RESPONSE_IMAGE_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -109,7 +110,10 @@ export default function BulletinView({ data, onPrayerSubmitted }) {
   if (!data?.bulletin) return <NoPublishedBulletin settings={data?.settings} />;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-bulletin-body>
+      {/* Floating "share with social media" button on text selection.
+          Listens for selectionchange and pops up near the highlight. */}
+      <HighlightShare bulletinId={data.bulletin.id} />
       {isStaff && (
         <div className="no-print bg-umc-50 border border-umc-200 rounded-md px-3 py-2 text-sm flex items-center justify-between">
           <span className="text-umc-900">
