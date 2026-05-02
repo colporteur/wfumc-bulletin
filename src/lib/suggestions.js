@@ -15,7 +15,7 @@
 // page reflects "used in bulletin for <date>" and we don't accidentally
 // add the same suggestion twice.
 
-import { supabase, withTimeout } from './supabase';
+import { supabase, withTimeout, callClaude } from './supabase';
 
 export const SUGGESTION_KIND_LABELS = {
   hymn: 'Hymn',
@@ -209,6 +209,247 @@ export async function addSuggestionToBulletin(suggestion, bulletinId) {
   if (linkErr) throw linkErr;
 
   return newItem;
+}
+
+// =====================================================================
+// Smart Add — Claude-assisted incorporation of a suggestion into an
+// EXISTING liturgy_item (rather than creating a new one).
+//
+// Two modes:
+//   * overwrite — Claude proposes new values for every editable field
+//                 on the target item. Existing content is replaced.
+//   * append    — Claude proposes additional text to append to the
+//                 target item's inline_body (or expanded_detail if
+//                 inline_body is already long). Other fields stay put.
+//
+// Returns a JSON object of { fieldName: value } keys appropriate to the
+// item's type. The modal renders these in editable form fields so the
+// pastor can tweak before committing. Then `applySmartEdit` writes the
+// final values and links the suggestion → item.
+// =====================================================================
+
+// Editable fields per item type. Used to build the prompt schema and
+// to filter Claude's response to known columns.
+const EDITABLE_FIELDS = {
+  // Common across all types
+  _common: [
+    'title',
+    'center_text',
+    'right_text',
+    'is_starred',
+    'inline_body',
+    'expanded_detail',
+  ],
+  hymn: ['hymn_title', 'tune_name', 'hymnal_source', 'hymn_number', 'hymn_bio'],
+  scripture: [
+    'scripture_reference',
+    'scripture_translation',
+    'scripture_text',
+  ],
+  music: [],
+  prayer_text: [],
+  responsive_reading: [],
+  communion: [],
+  generic: [],
+  giving: [],
+  // sermon items have lazy-created sermons + their own sub-fields;
+  // smart-add deliberately avoids them to not stomp on Sermon Archive flows.
+  sermon: [],
+};
+
+export function fieldsForItemType(itemType) {
+  const extra = EDITABLE_FIELDS[itemType] ?? [];
+  return [...EDITABLE_FIELDS._common, ...extra];
+}
+
+// Pull the worship_plan for a service_date so we can give Claude the
+// week's theme + scripture as context. Returns null if none exists.
+async function loadWorshipPlanForDate(serviceDate) {
+  if (!serviceDate) return null;
+  try {
+    const { data } = await withTimeout(
+      supabase
+        .from('worship_plans')
+        .select('scripture_reference, theme, sermon_topic, lectionary_designation')
+        .eq('service_date', serviceDate)
+        .maybeSingle()
+    );
+    return data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Build a compact JSON snapshot of a liturgy item — only the fields
+// we'd consider rewriting. Keeps the prompt small.
+function snapshotItem(item) {
+  const out = { item_type: item.item_type };
+  for (const f of fieldsForItemType(item.item_type)) {
+    if (item[f] !== undefined) out[f] = item[f];
+  }
+  return out;
+}
+
+// Ask Claude to fill in the right fields. Returns the parsed JSON
+// (validated to only contain known fields).
+export async function smartFillSuggestion({
+  suggestion,
+  targetItem,
+  mode,
+  serviceDate,
+}) {
+  if (!suggestion) throw new Error('suggestion required');
+  if (!targetItem) throw new Error('targetItem required');
+  if (!['overwrite', 'append'].includes(mode)) {
+    throw new Error("mode must be 'overwrite' or 'append'");
+  }
+
+  const plan = await loadWorshipPlanForDate(serviceDate);
+  const fields = fieldsForItemType(targetItem.item_type);
+  const itemSnapshot = snapshotItem(targetItem);
+
+  const suggestionPayload = {
+    kind: suggestion.suggestion_kind,
+    title: suggestion.title,
+    body: suggestion.body || null,
+    hymnal: suggestion.hymnal || null,
+    hymn_number: suggestion.hymn_number || null,
+  };
+
+  const planContext = plan
+    ? {
+        liturgical_designation: plan.lectionary_designation || null,
+        theme: plan.theme || null,
+        scripture_reference: plan.scripture_reference || null,
+        sermon_topic: plan.sermon_topic || null,
+      }
+    : null;
+
+  const modeInstructions =
+    mode === 'overwrite'
+      ? `MODE: overwrite. Propose new values for any of the listed fields that you can fill confidently from the suggestion. Set a field to null if it shouldn't be set. Don't fabricate hymn numbers, tune names, or attribution you aren't sure about — leave those null and the pastor will fill in by hand. The pastor will see your proposals in editable form fields and can tweak before committing.`
+      : `MODE: append. Keep existing field values as-is. Propose ONLY a string to append to the target item's inline_body (or to expanded_detail if inline_body already has substantial text). Return the FULL new value of inline_body (or expanded_detail) — i.e., existing content + a blank line + your addition. Other fields should be omitted from your response.`;
+
+  const system = `You are helping a pastor prepare a Sunday bulletin for Wedowee First UMC. A worship-team member made a suggestion (a hymn pick, liturgy text, or special-music idea), and the pastor wants to incorporate it into an existing item in the order of worship.
+
+You will be given:
+- The suggestion (kind, title, body, optional hymnal info)
+- The target liturgy item's current state (item_type and current field values)
+- The week's worship-plan context (if available): theme, scripture, sermon topic, lectionary designation
+- The mode: overwrite or append
+
+${modeInstructions}
+
+Return ONLY a JSON object — no markdown code fences, no commentary. The keys of the object must be a subset of these allowed fields for this item type:
+${JSON.stringify(fields, null, 2)}
+
+Field types and rules:
+- "title" (string): the visible title shown in the bulletin
+- "center_text" (string|null): centered subtitle (e.g. "UMH 302" under a hymn title)
+- "right_text" (string|null): right-aligned text (e.g. tune name)
+- "is_starred" (boolean): true if this is a "stand if able" item
+- "inline_body" (string|null): visible body text shown directly under the title
+- "expanded_detail" (string|null): body shown when worshipper expands the item
+${
+  targetItem.item_type === 'hymn'
+    ? `- "hymn_title" (string|null), "tune_name" (string|null), "hymn_bio" (string|null)
+- "hymnal_source" (string|null): MUST be exactly "UMH" or "TFWS" — leave null if neither applies
+- "hymn_number" (string|null): just the number as a string`
+    : ''
+}${
+    targetItem.item_type === 'scripture'
+      ? `- "scripture_reference" (string|null): e.g. "John 3:1-21"
+- "scripture_translation" (string|null): e.g. "NRSVUe"
+- "scripture_text" (string|null): the full passage text, with each verse prefixed [N]`
+      : ''
+  }`;
+
+  const userText = `SUGGESTION:
+${JSON.stringify(suggestionPayload, null, 2)}
+
+TARGET LITURGY ITEM (current state):
+${JSON.stringify(itemSnapshot, null, 2)}
+
+${planContext ? `WORSHIP PLAN CONTEXT:\n${JSON.stringify(planContext, null, 2)}\n` : 'WORSHIP PLAN CONTEXT: (none)\n'}
+
+Return the JSON now.`;
+
+  const result = await callClaude({
+    system,
+    messages: [{ role: 'user', content: userText }],
+    max_tokens: 1500,
+  });
+
+  const text = result?.content?.[0]?.text?.trim();
+  if (!text) throw new Error('Claude returned an empty response.');
+
+  let parsed;
+  try {
+    // Strip stray code fences just in case
+    const cleaned = text
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/, '')
+      .replace(/```\s*$/, '')
+      .trim();
+    parsed = JSON.parse(cleaned);
+  } catch {
+    throw new Error(
+      `Couldn't parse Claude's response as JSON. Raw: ${text.slice(0, 200)}`
+    );
+  }
+
+  // Filter to known fields only.
+  const allowed = new Set(fields);
+  const filtered = {};
+  for (const [k, v] of Object.entries(parsed)) {
+    if (allowed.has(k)) filtered[k] = v;
+  }
+  // Hymnal_source must be UMH or TFWS or null — coerce.
+  if (
+    'hymnal_source' in filtered &&
+    filtered.hymnal_source !== null &&
+    !['UMH', 'TFWS'].includes(String(filtered.hymnal_source).toUpperCase())
+  ) {
+    filtered.hymnal_source = null;
+  } else if ('hymnal_source' in filtered && filtered.hymnal_source) {
+    filtered.hymnal_source = String(filtered.hymnal_source).toUpperCase();
+  }
+
+  return filtered;
+}
+
+// Apply the user-confirmed edits to the target liturgy_item, and link
+// the suggestion to that item so the worship app's /suggestions page
+// shows it as added.
+export async function applySmartEdit({
+  suggestionId,
+  bulletinId,
+  itemId,
+  fields,
+}) {
+  if (!itemId) throw new Error('itemId required');
+  if (!fields || Object.keys(fields).length === 0) {
+    throw new Error('No fields to update.');
+  }
+  const { error: updErr } = await withTimeout(
+    supabase.from('liturgy_items').update(fields).eq('id', itemId)
+  );
+  if (updErr) throw updErr;
+
+  if (suggestionId) {
+    const { error: linkErr } = await withTimeout(
+      supabase
+        .from('element_suggestions')
+        .update({
+          added_to_bulletin_id: bulletinId,
+          added_to_liturgy_item_id: itemId,
+          added_at: new Date().toISOString(),
+          status: 'accepted',
+        })
+        .eq('id', suggestionId)
+    );
+    if (linkErr) throw linkErr;
+  }
 }
 
 // Quick count of pending suggestions across all dates — for a future

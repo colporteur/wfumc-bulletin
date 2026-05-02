@@ -7,6 +7,7 @@ import {
   SUGGESTION_KIND_LABELS,
   SUGGESTION_STATUS_LABELS,
 } from '../lib/suggestions';
+import SmartAddModal from './SmartAddModal.jsx';
 
 // Phase 4: Worship-element suggestions surfaced inside the bulletin
 // editor's Order of Worship section.
@@ -23,6 +24,7 @@ import {
 export default function SuggestionsPanel({
   bulletin,
   userId,
+  liturgyItems = [],
   onItemAdded,
 }) {
   const [loading, setLoading] = useState(true);
@@ -30,6 +32,7 @@ export default function SuggestionsPanel({
   const [pendingAccepted, setPendingAccepted] = useState([]);
   const [added, setAdded] = useState([]);
   const [busyId, setBusyId] = useState(null);
+  const [smartAddSuggestion, setSmartAddSuggestion] = useState(null);
 
   const reload = async () => {
     if (!bulletin?.id || !bulletin?.service_date) return;
@@ -131,6 +134,8 @@ export default function SuggestionsPanel({
                   onAccept={() => handleReview(sug, 'accepted')}
                   onDecline={() => handleReview(sug, 'declined')}
                   onAdd={() => handleAdd(sug)}
+                  onSmartAdd={() => setSmartAddSuggestion(sug)}
+                  hasLiturgyItems={liturgyItems.length > 0}
                 />
               ))}
             </ul>
@@ -161,6 +166,19 @@ export default function SuggestionsPanel({
           )}
         </>
       )}
+
+      <SmartAddModal
+        open={Boolean(smartAddSuggestion)}
+        onClose={() => setSmartAddSuggestion(null)}
+        suggestion={smartAddSuggestion}
+        bulletinId={bulletin?.id}
+        serviceDate={bulletin?.service_date}
+        liturgyItems={liturgyItems}
+        onApplied={async () => {
+          await reload();
+          onItemAdded?.();
+        }}
+      />
     </div>
   );
 }
@@ -170,7 +188,15 @@ const STATUS_BADGE = {
   accepted: 'bg-green-100 text-green-800',
 };
 
-function SuggestionRow({ suggestion, busy, onAccept, onDecline, onAdd }) {
+function SuggestionRow({
+  suggestion,
+  busy,
+  onAccept,
+  onDecline,
+  onAdd,
+  onSmartAdd,
+  hasLiturgyItems,
+}) {
   const sug = suggestion;
   const isPending = sug.status === 'pending';
   const isAccepted = sug.status === 'accepted';
@@ -231,19 +257,32 @@ function SuggestionRow({ suggestion, busy, onAccept, onDecline, onAdd }) {
             </>
           )}
           {(isAccepted || isPending) && (
-            <button
-              type="button"
-              onClick={onAdd}
-              disabled={busy}
-              className="text-xs btn-primary py-0.5 px-2 disabled:opacity-50"
-              title={
-                isPending
-                  ? 'Accept and add to the order of worship'
-                  : 'Add to the order of worship'
-              }
-            >
-              {busy ? '…' : '+ Add to liturgy'}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={onAdd}
+                disabled={busy}
+                className="text-xs btn-primary py-0.5 px-2 disabled:opacity-50"
+                title={
+                  isPending
+                    ? 'Accept and add as a new item at the end of the order of worship'
+                    : 'Add as a new item at the end of the order of worship'
+                }
+              >
+                {busy ? '…' : '+ Add to liturgy'}
+              </button>
+              {hasLiturgyItems && (
+                <button
+                  type="button"
+                  onClick={onSmartAdd}
+                  disabled={busy}
+                  className="text-xs btn-secondary py-0.5 px-2 disabled:opacity-50"
+                  title="Use Claude to fill an existing liturgy item with this suggestion's content"
+                >
+                  ✨ Smart Add
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
