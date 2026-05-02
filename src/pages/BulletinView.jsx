@@ -720,10 +720,64 @@ function PrayerSection({ categories, requests, onPrayerSubmitted }) {
 // Check-in (entirely optional — clearly labeled as such)
 // ---------------------------------------------------------------------
 // ---------------------------------------------------------------------
-// Response Prompt — per-week question worshippers can respond to with
-// text + optional photo. Submissions feed the social media team.
+// Response Prompts — per-bulletin questions worshippers can respond to
+// with text + optional photo. Each bulletin can carry several prompts
+// (sermon-tied, anthem-tied, open-ended). Each gets its own card with
+// its own form. Submissions feed the WFUMC Social Media Team.
 // ---------------------------------------------------------------------
 function ResponsePromptSection({ bulletin }) {
+  const [prompts, setPrompts] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!bulletin?.id) return;
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const { data, error } = await withTimeout(
+          supabase
+            .from('response_prompts')
+            .select('id, text, sort_order')
+            .eq('bulletin_id', bulletin.id)
+            .order('sort_order', { ascending: true })
+            .order('created_at', { ascending: true })
+        );
+        if (error) throw error;
+        if (cancelled) return;
+        setPrompts(data ?? []);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('Failed to load response prompts:', e);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bulletin?.id]);
+
+  // No prompts → don't render the section at all (matches old behavior).
+  if (loading || prompts.length === 0) return null;
+
+  return (
+    <section id="response" className="space-y-3">
+      <SectionHeading>Response</SectionHeading>
+      <div className="space-y-4">
+        {prompts.map((p) => (
+          <SinglePromptCard
+            key={p.id}
+            prompt={p}
+            bulletinId={bulletin.id}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function SinglePromptCard({ prompt, bulletinId }) {
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -737,9 +791,6 @@ function ResponsePromptSection({ bulletin }) {
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const fileInputRef = useRef(null);
-
-  // No prompt this week → don't render the section at all.
-  if (!bulletin?.response_prompt) return null;
 
   const reset = () => {
     setDraft({
@@ -789,9 +840,6 @@ function ResponsePromptSection({ bulletin }) {
     try {
       let imageUrl = null;
       if (imageFile) {
-        // Downsize to a reasonable max for social-media use (preserves
-        // quality better than the Claude-vision pipeline since this is
-        // for human eyes, not OCR).
         const { blob, mediaType } = await prepareImageForUpload(
           imageFile,
           2400,
@@ -803,7 +851,7 @@ function ResponsePromptSection({ bulletin }) {
             : mediaType === 'image/webp'
               ? 'webp'
               : 'jpg';
-        const path = `responses/${bulletin.id}/${Date.now()}-${Math.random()
+        const path = `responses/${bulletinId}/${Date.now()}-${Math.random()
           .toString(36)
           .slice(2, 8)}.${ext}`;
         const { error: upErr } = await withTimeout(
@@ -821,7 +869,8 @@ function ResponsePromptSection({ bulletin }) {
 
       const { error: insErr } = await withTimeout(
         supabase.from('responses').insert({
-          bulletin_id: bulletin.id,
+          bulletin_id: bulletinId,
+          prompt_id: prompt.id,
           is_anonymous: draft.is_anonymous,
           submitter_name: draft.is_anonymous
             ? null
@@ -842,160 +891,156 @@ function ResponsePromptSection({ bulletin }) {
   };
 
   return (
-    <section id="response" className="space-y-3">
-      <SectionHeading>Response</SectionHeading>
+    <div className="card space-y-3">
+      <p className="font-serif text-base text-umc-900 italic">
+        "{prompt.text}"
+      </p>
 
-      <div className="card space-y-3">
-        <p className="font-serif text-base text-umc-900 italic">
-          "{bulletin.response_prompt}"
-        </p>
-
-        {submitted ? (
-          <div className="text-center py-2 space-y-2">
-            <p className="text-sm text-umc-900">
-              Thank you for sharing.
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                setSubmitted(false);
-                setOpen(true);
-              }}
-              className="text-xs text-umc-700 underline no-print"
-            >
-              Submit another
-            </button>
-          </div>
-        ) : !open ? (
+      {submitted ? (
+        <div className="text-center py-2 space-y-2">
+          <p className="text-sm text-umc-900">Thank you for sharing.</p>
           <button
             type="button"
-            onClick={() => setOpen(true)}
-            className="btn-primary w-full no-print"
+            onClick={() => {
+              setSubmitted(false);
+              setOpen(true);
+            }}
+            className="text-xs text-umc-700 underline no-print"
           >
-            Share your response
+            Submit another
           </button>
-        ) : (
-          <form onSubmit={handleSubmit} className="space-y-3 no-print">
-            {error && (
-              <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
-                {error}
-              </p>
-            )}
+        </div>
+      ) : !open ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="btn-primary w-full no-print"
+        >
+          Share your response
+        </button>
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-3 no-print">
+          {error && (
+            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
+              {error}
+            </p>
+          )}
 
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={draft.is_anonymous}
-                onChange={(e) =>
-                  setDraft({ ...draft, is_anonymous: e.target.checked })
-                }
-                className="h-4 w-4 rounded border-gray-300 text-umc-700"
-              />
-              <span className="text-sm text-gray-700">Submit anonymously</span>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={draft.is_anonymous}
+              onChange={(e) =>
+                setDraft({ ...draft, is_anonymous: e.target.checked })
+              }
+              className="h-4 w-4 rounded border-gray-300 text-umc-700"
+            />
+            <span className="text-sm text-gray-700">Submit anonymously</span>
+          </label>
+
+          <div>
+            <label className="label">Your name</label>
+            <input
+              type="text"
+              className="input"
+              value={draft.submitter_name}
+              onChange={(e) =>
+                setDraft({ ...draft, submitter_name: e.target.value })
+              }
+              disabled={draft.is_anonymous}
+              placeholder={draft.is_anonymous ? 'Anonymous' : 'e.g., Jane Smith'}
+            />
+          </div>
+
+          <div>
+            <label className="label">
+              Your response (optional if attaching a photo)
             </label>
+            <textarea
+              className="input min-h-[100px]"
+              value={draft.response_text}
+              onChange={(e) =>
+                setDraft({ ...draft, response_text: e.target.value })
+              }
+              placeholder="Write whatever's on your heart…"
+            />
+          </div>
 
+          <div>
+            <label className="label">Photo (optional)</label>
+            {imagePreview ? (
+              <div className="space-y-2">
+                <img
+                  src={imagePreview}
+                  alt="Your photo"
+                  className="max-h-64 rounded border border-gray-200"
+                />
+                <button
+                  type="button"
+                  onClick={clearImage}
+                  className="text-xs text-red-600 hover:text-red-800 underline"
+                >
+                  Remove photo
+                </button>
+              </div>
+            ) : (
+              <label className="btn-secondary text-sm cursor-pointer inline-block">
+                📷 Take or pick a photo
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleImagePick}
+                />
+              </label>
+            )}
+          </div>
+
+          {imagePreview && (
             <div>
-              <label className="label">Your name</label>
+              <label className="label">Caption (optional)</label>
               <input
                 type="text"
                 className="input"
-                value={draft.submitter_name}
+                value={draft.caption}
                 onChange={(e) =>
-                  setDraft({ ...draft, submitter_name: e.target.value })
+                  setDraft({ ...draft, caption: e.target.value })
                 }
-                disabled={draft.is_anonymous}
-                placeholder={draft.is_anonymous ? 'Anonymous' : 'e.g., Jane Smith'}
+                placeholder="A short note about the photo"
               />
             </div>
+          )}
 
-            <div>
-              <label className="label">Your response (optional if attaching a photo)</label>
-              <textarea
-                className="input min-h-[100px]"
-                value={draft.response_text}
-                onChange={(e) =>
-                  setDraft({ ...draft, response_text: e.target.value })
-                }
-                placeholder="Write whatever's on your heart…"
-              />
-            </div>
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              disabled={submitting}
+              className="btn-primary flex-1 disabled:opacity-50"
+            >
+              {submitting ? 'Submitting…' : 'Submit response'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                reset();
+                setError(null);
+              }}
+              className="btn-secondary"
+            >
+              Cancel
+            </button>
+          </div>
 
-            <div>
-              <label className="label">Photo (optional)</label>
-              {imagePreview ? (
-                <div className="space-y-2">
-                  <img
-                    src={imagePreview}
-                    alt="Your photo"
-                    className="max-h-64 rounded border border-gray-200"
-                  />
-                  <button
-                    type="button"
-                    onClick={clearImage}
-                    className="text-xs text-red-600 hover:text-red-800 underline"
-                  >
-                    Remove photo
-                  </button>
-                </div>
-              ) : (
-                <label className="btn-secondary text-sm cursor-pointer inline-block">
-                  📷 Take or pick a photo
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={handleImagePick}
-                  />
-                </label>
-              )}
-            </div>
-
-            {imagePreview && (
-              <div>
-                <label className="label">Caption (optional)</label>
-                <input
-                  type="text"
-                  className="input"
-                  value={draft.caption}
-                  onChange={(e) =>
-                    setDraft({ ...draft, caption: e.target.value })
-                  }
-                  placeholder="A short note about the photo"
-                />
-              </div>
-            )}
-
-            <div className="flex gap-2">
-              <button
-                type="submit"
-                disabled={submitting}
-                className="btn-primary flex-1 disabled:opacity-50"
-              >
-                {submitting ? 'Submitting…' : 'Submit response'}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setOpen(false);
-                  reset();
-                  setError(null);
-                }}
-                className="btn-secondary"
-              >
-                Cancel
-              </button>
-            </div>
-
-            <p className="text-xs text-gray-500">
-              Your response goes to our church staff and may be used in
-              social media. If you prefer to share without attribution,
-              tap "Submit anonymously" above.
-            </p>
-          </form>
-        )}
-      </div>
-    </section>
+          <p className="text-xs text-gray-500">
+            Your response goes to the WFUMC Social Media Team and may be used
+            in social media. If you prefer to share without attribution,
+            tap "Submit anonymously" above.
+          </p>
+        </form>
+      )}
+    </div>
   );
 }
 

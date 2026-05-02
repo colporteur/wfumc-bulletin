@@ -144,7 +144,7 @@ export default function HighlightShare({ bulletinId }) {
           className="no-print fixed z-30 px-3 py-1.5 text-xs rounded-full bg-umc-900 text-white shadow-lg hover:bg-umc-800 transition-colors flex items-center gap-1"
           style={{ top: pos.top, left: pos.left }}
         >
-          ✨ Share with social media
+          ✨ Share with the WFUMC Social Media Team
         </button>
       )}
 
@@ -212,7 +212,7 @@ function HighlightModal({
             <div className="text-center space-y-3 py-4">
               <p className="text-2xl">✨</p>
               <p className="text-base text-umc-900">
-                Sent to the social media team. Thank you!
+                Sent to the WFUMC Social Media Team. Thank you!
               </p>
               <button
                 type="button"
@@ -227,7 +227,7 @@ function HighlightModal({
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h2 className="font-serif text-lg text-umc-900">
-                    Share with social media
+                    Share with the WFUMC Social Media Team
                   </h2>
                   {sourceLabel && (
                     <p className="text-xs text-gray-500 mt-0.5">
