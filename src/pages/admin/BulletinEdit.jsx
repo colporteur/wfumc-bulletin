@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { supabase, withTimeout } from '../../lib/supabase';
 import LoadingSpinner from '../../components/LoadingSpinner.jsx';
 import { useAuth } from '../../contexts/AuthContext.jsx';
@@ -50,6 +50,7 @@ const statusBadgeClass = {
 
 export default function BulletinEdit() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const { profile, user } = useAuth();
   const [bulletin, setBulletin] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -133,6 +134,36 @@ export default function BulletinEdit() {
     update({ status: 'published', published_at: new Date().toISOString() });
   const unpublish = () => update({ status: 'draft', published_at: null });
   const archive = () => update({ status: 'archived' });
+
+  // Delete a draft bulletin entirely. Gated to draft status so a
+  // published bulletin (which worshippers might be reading) can't be
+  // accidentally nuked. Cascades clean up liturgy_items / responses /
+  // check_ins via FK; preachings get bulletin_id set to null (the
+  // sermon row stays put).
+  const deleteDraft = async () => {
+    if (bulletin.status !== 'draft') return;
+    if (
+      !window.confirm(
+        `Delete this draft bulletin (${bulletin.service_date})? ` +
+          `This removes the bulletin and its liturgy items. ` +
+          `Any sermon attached stays in the Sermon Archive.`
+      )
+    ) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const { error: delErr } = await withTimeout(
+        supabase.from('bulletins').delete().eq('id', bulletin.id)
+      );
+      if (delErr) throw delErr;
+      navigate('/admin/bulletins');
+    } catch (e) {
+      setError(e.message || String(e));
+      setSaving(false);
+    }
+  };
 
   // Phase-3: pull latest scripture / theme / sermon topic from the
   // matching worship_plan into this bulletin. Asks before overwriting
@@ -235,13 +266,23 @@ export default function BulletinEdit() {
             ↻ From worship plan
           </button>
           {bulletin.status === 'draft' && (
-            <button
-              onClick={publish}
-              disabled={saving}
-              className="btn-primary disabled:opacity-50"
-            >
-              Publish
-            </button>
+            <>
+              <button
+                onClick={publish}
+                disabled={saving}
+                className="btn-primary disabled:opacity-50"
+              >
+                Publish
+              </button>
+              <button
+                onClick={deleteDraft}
+                disabled={saving}
+                className="btn-secondary text-red-600 border-red-300 hover:bg-red-50 disabled:opacity-50"
+                title="Permanently delete this draft bulletin"
+              >
+                Delete draft
+              </button>
+            </>
           )}
           {bulletin.status === 'published' && (
             <>
