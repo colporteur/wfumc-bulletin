@@ -11,6 +11,7 @@ import AdminDashboard from './pages/admin/Dashboard.jsx';
 import BulletinList from './pages/admin/BulletinList.jsx';
 import BulletinEdit from './pages/admin/BulletinEdit.jsx';
 import Settings from './pages/admin/Settings.jsx';
+import Users from './pages/admin/Users.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 import AdminLayout from './components/AdminLayout.jsx';
 import WorshipperLayout from './components/WorshipperLayout.jsx';
@@ -41,6 +42,14 @@ export default function App() {
         <Route path="/admin/bulletins" element={<BulletinList />} />
         <Route path="/admin/bulletins/:id" element={<BulletinEdit />} />
         <Route path="/admin/settings" element={<Settings />} />
+        <Route
+          path="/admin/users"
+          element={
+            <ProtectedRoute requirePastor>
+              <Users />
+            </ProtectedRoute>
+          }
+        />
       </Route>
 
       <Route path="*" element={<NotFound />} />

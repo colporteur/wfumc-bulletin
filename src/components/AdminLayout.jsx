@@ -56,9 +56,14 @@ export default function AdminLayout() {
               Bulletins
             </NavLink>
             {isPastor && (
-              <NavLink to="/admin/settings" className={navClass}>
-                Settings
-              </NavLink>
+              <>
+                <NavLink to="/admin/users" className={navClass}>
+                  Users
+                </NavLink>
+                <NavLink to="/admin/settings" className={navClass}>
+                  Settings
+                </NavLink>
+              </>
             )}
           </nav>
         </aside>

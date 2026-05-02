@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { supabase, withTimeout } from '../../lib/supabase';
 import LoadingSpinner from '../../components/LoadingSpinner.jsx';
+import { useAuth } from '../../contexts/AuthContext.jsx';
+import { canSeeBulletinSection } from '../../lib/permissions';
 
 import CoverSection from './sections/CoverSection.jsx';
 import WelcomeCalendarSection from './sections/WelcomeCalendarSection.jsx';
@@ -47,11 +49,32 @@ const statusBadgeClass = {
 
 export default function BulletinEdit() {
   const { id } = useParams();
+  const { profile } = useAuth();
   const [bulletin, setBulletin] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [activeSection, setActiveSection] = useState('cover');
+  // Filter the section list to ones this user's role is allowed to see.
+  // Default to the first allowed section so a music director lands on
+  // Order of Worship instead of Cover.
+  const visibleSections = useMemo(
+    () => SECTIONS.filter((s) => canSeeBulletinSection(profile?.role, s.key)),
+    [profile?.role]
+  );
+  const [activeSection, setActiveSection] = useState(
+    () => visibleSections[0]?.key ?? 'cover'
+  );
+
+  // If the user's role changes (rare) and the current section is no
+  // longer visible, jump to the first allowed one.
+  useEffect(() => {
+    if (
+      visibleSections.length > 0 &&
+      !visibleSections.find((s) => s.key === activeSection)
+    ) {
+      setActiveSection(visibleSections[0].key);
+    }
+  }, [visibleSections, activeSection]);
 
   const load = async () => {
     setLoading(true);
@@ -121,7 +144,19 @@ export default function BulletinEdit() {
   });
 
   const ActiveComponent =
-    SECTIONS.find((s) => s.key === activeSection)?.Component ?? CoverSection;
+    visibleSections.find((s) => s.key === activeSection)?.Component ?? null;
+
+  if (visibleSections.length === 0) {
+    return (
+      <div className="max-w-lg mx-auto mt-12 p-6 text-center space-y-3">
+        <h1 className="text-xl font-semibold text-umc-900">No bulletin sections available</h1>
+        <p className="text-sm text-gray-600">
+          Your role doesn't have access to any bulletin sections. If this
+          looks wrong, ask Pastor Todd to update your role on the Users page.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -195,9 +230,9 @@ export default function BulletinEdit() {
         </p>
       )}
 
-      {/* Section nav */}
+      {/* Section nav — filtered to ones the role can access */}
       <nav className="border-b border-gray-200 flex flex-wrap gap-1 -mb-px">
-        {SECTIONS.map((s) => {
+        {visibleSections.map((s) => {
           const active = s.key === activeSection;
           return (
             <button
