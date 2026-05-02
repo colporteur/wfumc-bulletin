@@ -4,6 +4,7 @@ import { supabase, withTimeout } from '../../lib/supabase';
 import LoadingSpinner from '../../components/LoadingSpinner.jsx';
 import { useAuth } from '../../contexts/AuthContext.jsx';
 import { canSeeBulletinSection } from '../../lib/permissions';
+import { syncBulletinFromWorshipPlan } from '../../lib/worshipPlanSync';
 
 import CoverSection from './sections/CoverSection.jsx';
 import WelcomeCalendarSection from './sections/WelcomeCalendarSection.jsx';
@@ -49,10 +50,11 @@ const statusBadgeClass = {
 
 export default function BulletinEdit() {
   const { id } = useParams();
-  const { profile } = useAuth();
+  const { profile, user } = useAuth();
   const [bulletin, setBulletin] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [planSyncStatus, setPlanSyncStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   // Filter the section list to ones this user's role is allowed to see.
   // Default to the first allowed section so a music director lands on
@@ -132,6 +134,45 @@ export default function BulletinEdit() {
   const unpublish = () => update({ status: 'draft', published_at: null });
   const archive = () => update({ status: 'archived' });
 
+  // Phase-3: pull latest scripture / theme / sermon topic from the
+  // matching worship_plan into this bulletin. Asks before overwriting
+  // any non-blank values so we don't clobber pastor edits.
+  const refreshFromWorshipPlan = async () => {
+    if (!bulletin) return;
+    const overwrite = window.confirm(
+      'Pull from worship plan?\n\n' +
+        'OK = overwrite existing scripture / theme / sermon topic with the plan\'s values.\n' +
+        'Cancel = only fill in blanks (keep what you\'ve already typed).'
+    );
+    setPlanSyncStatus({ kind: 'busy' });
+    try {
+      const result = await syncBulletinFromWorshipPlan(
+        bulletin.id,
+        bulletin.service_date,
+        { includeSermon: true, overwrite, userId: user?.id }
+      );
+      if (!result.applied) {
+        setPlanSyncStatus({
+          kind: 'info',
+          message:
+            result.reason === 'no_plan'
+              ? 'No worship plan found for this date.'
+              : 'Worship plan matched, but nothing needed to change.',
+        });
+      } else {
+        setPlanSyncStatus({
+          kind: 'success',
+          message: `Pulled from worship plan: ${result.changes.join(', ')}`,
+        });
+      }
+    } catch (e) {
+      setPlanSyncStatus({
+        kind: 'error',
+        message: e.message || String(e),
+      });
+    }
+  };
+
   // Parse service_date as local time (not UTC) — otherwise YYYY-MM-DD strings
   // shift by a day depending on timezone.
   const prettyDate = new Date(
@@ -185,6 +226,14 @@ export default function BulletinEdit() {
         </div>
 
         <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={refreshFromWorshipPlan}
+            disabled={saving}
+            className="btn-secondary disabled:opacity-50"
+            title="Pull scripture / theme / sermon topic from the matching worship plan"
+          >
+            ↻ From worship plan
+          </button>
           {bulletin.status === 'draft' && (
             <button
               onClick={publish}
@@ -227,6 +276,35 @@ export default function BulletinEdit() {
       {error && (
         <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
           {error}
+        </p>
+      )}
+
+      {planSyncStatus && (
+        <p
+          className={`text-sm rounded px-3 py-2 flex items-center justify-between gap-3 ${
+            planSyncStatus.kind === 'success'
+              ? 'text-umc-900 bg-umc-50 border border-umc-200'
+              : planSyncStatus.kind === 'error'
+                ? 'text-red-600 bg-red-50 border border-red-200'
+                : planSyncStatus.kind === 'busy'
+                  ? 'text-gray-700 bg-gray-50 border border-gray-200'
+                  : 'text-gray-700 bg-gray-50 border border-gray-200'
+          }`}
+        >
+          <span>
+            {planSyncStatus.kind === 'busy'
+              ? 'Pulling from worship plan…'
+              : planSyncStatus.message}
+          </span>
+          {planSyncStatus.kind !== 'busy' && (
+            <button
+              type="button"
+              onClick={() => setPlanSyncStatus(null)}
+              className="text-xs underline"
+            >
+              Dismiss
+            </button>
+          )}
         </p>
       )}
 

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase, withTimeout } from '../../lib/supabase';
 import LoadingSpinner from '../../components/LoadingSpinner.jsx';
+import { syncBulletinFromWorshipPlan } from '../../lib/worshipPlanSync';
+import { useAuth } from '../../contexts/AuthContext.jsx';
 
 const statusBadgeClass = {
   draft: 'bg-gray-100 text-gray-700',
@@ -28,9 +30,11 @@ function nextSundayAfter(yyyymmdd) {
 }
 
 export default function BulletinList() {
+  const { user } = useAuth();
   const [bulletins, setBulletins] = useState(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState(null);
+  const [planSyncMessage, setPlanSyncMessage] = useState(null);
 
   const load = async () => {
     try {
@@ -121,6 +125,27 @@ export default function BulletinList() {
           copiedFrom = prevRes.data.service_date;
         }
       }
+
+      // 5. Phase-3 auto-flow: if a worship_plan exists for this date,
+      //    pull in scripture + theme + sermon topic. Only fills blanks
+      //    (overwrite=false) so anything copied from the prior bulletin
+      //    or already typed stays put.
+      try {
+        const sync = await syncBulletinFromWorshipPlan(newBulletin.id, newDate, {
+          includeSermon: true,
+          overwrite: false,
+          userId: user?.id,
+        });
+        if (sync.applied) {
+          setPlanSyncMessage(
+            `Pulled from worship plan: ${sync.changes.join(', ')}`
+          );
+        }
+      } catch (syncErr) {
+        // Non-fatal — bulletin still got created, just log it.
+        // eslint-disable-next-line no-console
+        console.warn('worship plan sync after create:', syncErr.message);
+      }
     } catch (e) {
       setError(e.message || String(e));
     } finally {
@@ -160,6 +185,19 @@ export default function BulletinList() {
       {error && (
         <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
           {error}
+        </p>
+      )}
+
+      {planSyncMessage && (
+        <p className="text-sm text-umc-900 bg-umc-50 border border-umc-200 rounded px-3 py-2 flex items-center justify-between gap-3">
+          <span>{planSyncMessage}</span>
+          <button
+            type="button"
+            onClick={() => setPlanSyncMessage(null)}
+            className="text-xs text-umc-700 hover:text-umc-900 underline"
+          >
+            Dismiss
+          </button>
         </p>
       )}
 
