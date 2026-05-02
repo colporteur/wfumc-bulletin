@@ -62,21 +62,40 @@ export function withTimeout(promise, ms = 15000) {
  * @param {Object} body - { messages: [...], system?, max_tokens?, model? }
  * @returns {Promise<Object>} the Anthropic response JSON
  */
-export async function callClaude(body) {
+export async function callClaude(body, opts = {}) {
+  const timeoutMs = opts.timeoutMs ?? 60000;
   const {
     data: { session },
   } = await supabase.auth.getSession();
   if (!session) {
     throw new Error('Not signed in');
   }
-  const res = await fetch(`${supabaseUrl}/functions/v1/claude-proxy`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${session.access_token}`,
-    },
-    body: JSON.stringify(body),
-  });
+  // Wrap fetch in a manual timeout — long Claude jobs (vision, big
+  // imports) can take 60-120s, longer than typical default timeouts.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(`${supabaseUrl}/functions/v1/claude-proxy`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    if (e?.name === 'AbortError') {
+      throw new Error(
+        `Claude took longer than ${Math.round(timeoutMs / 1000)}s to respond. ` +
+          `For long inputs this can happen — try again, or split into smaller pieces.`
+      );
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     const errBody = await res.text();
     throw new Error(`Claude proxy error ${res.status}: ${errBody}`);

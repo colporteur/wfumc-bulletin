@@ -3,6 +3,10 @@ import { supabase, withTimeout, callClaude } from '../../../lib/supabase';
 import { prepareImageForUpload, blobToBase64 } from '../../../lib/imageHelpers';
 import { parseLiturgyDocx, suggestMatches } from '../../../lib/liturgyDocx';
 import { parseMusicDocx, suggestMusicMatches } from '../../../lib/musicDocx';
+import {
+  refineLiturgyRows,
+  refineMusicRows,
+} from '../../../lib/importRefiner';
 import LoadingSpinner from '../../../components/LoadingSpinner.jsx';
 import SortableList, { DragHandle } from '../../../components/SortableList.jsx';
 import { useAuth } from '../../../contexts/AuthContext.jsx';
@@ -1504,6 +1508,10 @@ function LiturgyImportModal({ bulletin, items, onClose, onApplied }) {
   const [saveToSermon, setSaveToSermon] = useState(true);
   const [applying, setApplying] = useState(false);
   const [results, setResults] = useState(null);
+  // Claude refinement: idx → field-plan object the apply step writes verbatim.
+  // Empty until the user hits "Refine with Claude".
+  const [refinedPlans, setRefinedPlans] = useState({});
+  const [refining, setRefining] = useState(false);
   const fileInputRef = useRef(null);
 
   const handleFile = async (e) => {
@@ -1546,6 +1554,48 @@ function LiturgyImportModal({ bulletin, items, onClose, onApplied }) {
     setRowState((prev) => ({ ...prev, [idx]: { ...prev[idx], ...patch } }));
   };
 
+  // Send all selected, item-mapped rows to Claude for field-distribution
+  // refinement. Result is stored as refinedPlans[idx] = { ...fields }.
+  const runRefine = async () => {
+    const eligible = matches
+      .map((m, idx) => ({ m, idx }))
+      .filter(({ idx }) => {
+        const r = rowState[idx];
+        return r && !r.skip && r.selectedItemId;
+      })
+      .map(({ m, idx }) => {
+        const item = items.find((it) => it.id === rowState[idx].selectedItemId);
+        return {
+          idx,
+          heading: m.section.heading,
+          body: m.section.body,
+          item: {
+            id: item.id,
+            title: item.title,
+            item_type: item.item_type,
+          },
+        };
+      });
+    if (eligible.length === 0) {
+      setError('Nothing selected to refine.');
+      return;
+    }
+    setRefining(true);
+    setError(null);
+    try {
+      const plans = await refineLiturgyRows(eligible);
+      const map = {};
+      for (const p of plans) {
+        if (typeof p.idx === 'number') map[p.idx] = p;
+      }
+      setRefinedPlans(map);
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setRefining(false);
+    }
+  };
+
   const apply = async () => {
     setApplying(true);
     setPhase('applying');
@@ -1553,18 +1603,45 @@ function LiturgyImportModal({ bulletin, items, onClose, onApplied }) {
     const errors = [];
     let updatedItems = 0;
 
-    // 1. Update each selected liturgy_item's expanded_detail with the
-    //    section body. Skipped rows are ignored. Mode 'append' adds to
-    //    the item's CURRENT expanded_detail (re-fetched so we don't
-    //    clobber a prior row in the same import that wrote to the
-    //    same item).
+    // For each selected row: if a refined plan exists, apply ALL its
+    // fields. Otherwise fall back to the simple body→expanded_detail
+    // behavior. Append mode (per Todd) ONLY governs expanded_detail —
+    // every other field always overwrites.
     for (let idx = 0; idx < matches.length; idx++) {
       const row = rowState[idx];
       if (!row || row.skip || !row.selectedItemId) continue;
       const section = matches[idx].section;
+      const plan = refinedPlans[idx];
       try {
-        let newBody = section.body || '';
-        if (row.mode === 'append') {
+        const update = {};
+        let appendedExpanded = null;
+
+        if (plan) {
+          // Use Claude's plan for every field except expanded_detail —
+          // that one honors the append toggle.
+          for (const [key, value] of Object.entries(plan)) {
+            if (key === 'idx') continue;
+            if (key === 'expanded_detail') {
+              if (row.mode === 'append' && value) {
+                appendedExpanded = value;
+              } else {
+                update.expanded_detail = value || null;
+              }
+            } else {
+              update[key] = value;
+            }
+          }
+        } else {
+          // Heuristic-only: stuff the body into expanded_detail.
+          const body = section.body || '';
+          if (row.mode === 'append' && body) {
+            appendedExpanded = body;
+          } else {
+            update.expanded_detail = body || null;
+          }
+        }
+
+        if (appendedExpanded) {
           const { data: cur, error: getErr } = await withTimeout(
             supabase
               .from('liturgy_items')
@@ -1574,14 +1651,16 @@ function LiturgyImportModal({ bulletin, items, onClose, onApplied }) {
           );
           if (getErr) throw getErr;
           const existing = (cur?.expanded_detail || '').trim();
-          newBody = existing
-            ? `${existing}\n\n${newBody}`.trim()
-            : newBody;
+          update.expanded_detail = existing
+            ? `${existing}\n\n${appendedExpanded}`.trim()
+            : appendedExpanded;
         }
+
+        if (Object.keys(update).length === 0) continue;
         const { error: err } = await withTimeout(
           supabase
             .from('liturgy_items')
-            .update({ expanded_detail: newBody || null })
+            .update(update)
             .eq('id', row.selectedItemId)
         );
         if (err) throw err;
@@ -1699,12 +1778,36 @@ function LiturgyImportModal({ bulletin, items, onClose, onApplied }) {
 
           {phase === 'preview' && (
             <>
-              <p className="text-xs text-gray-500">
-                {matches.length} section{matches.length === 1 ? '' : 's'}{' '}
-                found in <span className="font-mono">{sourceFilename}</span>.
-                Adjust the matches below — anything you don't want imported,
-                check "skip".
-              </p>
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <p className="text-xs text-gray-500">
+                  {matches.length} section{matches.length === 1 ? '' : 's'}{' '}
+                  found in <span className="font-mono">{sourceFilename}</span>.
+                  Adjust the matches below — anything you don't want imported,
+                  check "skip".
+                </p>
+                <button
+                  type="button"
+                  onClick={runRefine}
+                  disabled={refining}
+                  className="btn-secondary text-xs disabled:opacity-50 whitespace-nowrap"
+                  title="Ask Claude to distribute each section's text into the appropriate fields (title, center, right, expanded, etc.)"
+                >
+                  {refining
+                    ? 'Refining…'
+                    : Object.keys(refinedPlans).length > 0
+                      ? '✨ Re-refine with Claude'
+                      : '✨ Refine with Claude'}
+                </button>
+              </div>
+              {Object.keys(refinedPlans).length > 0 && (
+                <p className="text-[10px] text-green-700 bg-green-50 border border-green-200 rounded px-2 py-1">
+                  Claude proposed field-level plans for{' '}
+                  {Object.keys(refinedPlans).length} row
+                  {Object.keys(refinedPlans).length === 1 ? '' : 's'}. Review
+                  in each row's "Show fields Claude will set" expander, then
+                  apply.
+                </p>
+              )}
 
               <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
                 {matches.map((m, idx) => {
@@ -1814,6 +1917,12 @@ function LiturgyImportModal({ bulletin, items, onClose, onApplied }) {
                               {m.section.body || '(empty)'}
                             </p>
                           </details>
+                          {refinedPlans[idx] && (
+                            <FieldPlanPreview
+                              plan={refinedPlans[idx]}
+                              mode={row.mode}
+                            />
+                          )}
                         </div>
                         <label className="flex items-center gap-1 text-xs text-gray-600 cursor-pointer shrink-0">
                           <input
@@ -1953,6 +2062,8 @@ function MusicImportModal({ bulletin, items, onClose, onApplied }) {
   const [rowState, setRowState] = useState({});
   const [applying, setApplying] = useState(false);
   const [results, setResults] = useState(null);
+  const [refinedPlans, setRefinedPlans] = useState({});
+  const [refining, setRefining] = useState(false);
   const fileInputRef = useRef(null);
 
   const handleFile = async (e) => {
@@ -1995,6 +2106,45 @@ function MusicImportModal({ bulletin, items, onClose, onApplied }) {
     setRowState((prev) => ({ ...prev, [idx]: { ...prev[idx], ...patch } }));
   };
 
+  const runRefine = async () => {
+    const eligible = rows
+      .map((r, idx) => ({ r, idx }))
+      .filter(({ idx }) => {
+        const s = rowState[idx];
+        return s && !s.skip && s.selectedItemId;
+      })
+      .map(({ r, idx }) => {
+        const item = items.find((it) => it.id === rowState[idx].selectedItemId);
+        return {
+          idx,
+          ...r,
+          item: {
+            id: item.id,
+            title: item.title,
+            item_type: item.item_type,
+          },
+        };
+      });
+    if (eligible.length === 0) {
+      setError('Nothing selected to refine.');
+      return;
+    }
+    setRefining(true);
+    setError(null);
+    try {
+      const plans = await refineMusicRows(eligible);
+      const map = {};
+      for (const p of plans) {
+        if (typeof p.idx === 'number') map[p.idx] = p;
+      }
+      setRefinedPlans(map);
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setRefining(false);
+    }
+  };
+
   const apply = async () => {
     setApplying(true);
     setPhase('applying');
@@ -2009,28 +2159,47 @@ function MusicImportModal({ bulletin, items, onClose, onApplied }) {
 
       try {
         const update = {};
-        let needsExisting = false;
+        let appendedExpanded = null;
+        const plan = refinedPlans[idx];
 
-        if (row.kind === 'music_item') {
-          // Always replace inline_body if overwrite; concatenate if append.
-          if (state.mode === 'append') needsExisting = true;
-          else update.inline_body = row.body || null;
-        } else if (row.kind === 'hymn') {
-          // Hymn fields are structured; always replace (no append concept).
-          update.hymnal_source = row.hymnal_source || null;
-          update.hymn_number = row.hymn_number || null;
-          update.hymn_title = row.hymn_title || null;
-          update.tune_name = row.tune_name || null;
-        } else if (row.kind === 'hymn_bio') {
-          // Always overwrite hymn_bio; append/overwrite controls
-          // expanded_detail behavior.
-          update.hymn_bio = row.body || null;
-          if (state.mode === 'append') needsExisting = true;
-          else update.expanded_detail = row.body || null;
+        if (plan) {
+          // Use Claude's plan for every field except expanded_detail —
+          // that one honors the row's append/overwrite mode.
+          for (const [key, value] of Object.entries(plan)) {
+            if (key === 'idx') continue;
+            if (key === 'expanded_detail') {
+              if (state.mode === 'append' && value) appendedExpanded = value;
+              else update.expanded_detail = value || null;
+            } else {
+              update[key] = value;
+            }
+          }
+        } else {
+          // Heuristic-only path (no refinement). Same behavior as before.
+          if (row.kind === 'music_item') {
+            if (state.mode === 'append' && row.body) appendedExpanded = null;
+            update.inline_body =
+              state.mode === 'append'
+                ? null /* set below after re-fetch */
+                : row.body || null;
+          } else if (row.kind === 'hymn') {
+            update.hymnal_source = row.hymnal_source || null;
+            update.hymn_number = row.hymn_number || null;
+            update.hymn_title = row.hymn_title || null;
+            update.tune_name = row.tune_name || null;
+          } else if (row.kind === 'hymn_bio') {
+            update.hymn_bio = row.body || null;
+            if (state.mode === 'append' && row.body) appendedExpanded = row.body;
+            else update.expanded_detail = row.body || null;
+          }
         }
 
-        if (needsExisting) {
-          // For append modes we need the current value to concatenate.
+        // For heuristic music_item append, we still need to concat
+        // inline_body. Detect that case explicitly.
+        const heuristicMusicAppend =
+          !plan && row.kind === 'music_item' && state.mode === 'append' && row.body;
+
+        if (appendedExpanded || heuristicMusicAppend) {
           const { data: cur, error: getErr } = await withTimeout(
             supabase
               .from('liturgy_items')
@@ -2039,19 +2208,21 @@ function MusicImportModal({ bulletin, items, onClose, onApplied }) {
               .single()
           );
           if (getErr) throw getErr;
-          if (row.kind === 'music_item') {
-            const existing = (cur?.inline_body || '').trim();
-            update.inline_body = existing
-              ? `${existing}\n\n${row.body || ''}`.trim()
-              : row.body || null;
-          } else if (row.kind === 'hymn_bio') {
+          if (appendedExpanded) {
             const existing = (cur?.expanded_detail || '').trim();
             update.expanded_detail = existing
-              ? `${existing}\n\n${row.body || ''}`.trim()
-              : row.body || null;
+              ? `${existing}\n\n${appendedExpanded}`.trim()
+              : appendedExpanded;
+          }
+          if (heuristicMusicAppend) {
+            const existing = (cur?.inline_body || '').trim();
+            update.inline_body = existing
+              ? `${existing}\n\n${row.body}`.trim()
+              : row.body;
           }
         }
 
+        if (Object.keys(update).length === 0) continue;
         const { error: err } = await withTimeout(
           supabase
             .from('liturgy_items')
@@ -2133,11 +2304,34 @@ function MusicImportModal({ bulletin, items, onClose, onApplied }) {
 
           {phase === 'preview' && (
             <>
-              <p className="text-xs text-gray-500">
-                {rows.length} item{rows.length === 1 ? '' : 's'} parsed.
-                Defaults: overwrite for music items + hymn fields, append
-                for hymn bios. Adjust per row as needed.
-              </p>
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <p className="text-xs text-gray-500">
+                  {rows.length} item{rows.length === 1 ? '' : 's'} parsed.
+                  Defaults: overwrite for music items + hymn fields, append
+                  for hymn bios. Adjust per row as needed.
+                </p>
+                <button
+                  type="button"
+                  onClick={runRefine}
+                  disabled={refining}
+                  className="btn-secondary text-xs disabled:opacity-50 whitespace-nowrap"
+                  title="Ask Claude to distribute each row's content into structured fields (title, center, right, etc.)"
+                >
+                  {refining
+                    ? 'Refining…'
+                    : Object.keys(refinedPlans).length > 0
+                      ? '✨ Re-refine with Claude'
+                      : '✨ Refine with Claude'}
+                </button>
+              </div>
+              {Object.keys(refinedPlans).length > 0 && (
+                <p className="text-[10px] text-green-700 bg-green-50 border border-green-200 rounded px-2 py-1">
+                  Claude proposed field-level plans for{' '}
+                  {Object.keys(refinedPlans).length} row
+                  {Object.keys(refinedPlans).length === 1 ? '' : 's'}. Review
+                  per-row, then apply.
+                </p>
+              )}
 
               <div className="space-y-2 max-h-[55vh] overflow-y-auto pr-1">
                 {rows.map((row, idx) => {
@@ -2228,6 +2422,12 @@ function MusicImportModal({ bulletin, items, onClose, onApplied }) {
                             </summary>
                             <RowSourcePreview row={row} />
                           </details>
+                          {refinedPlans[idx] && (
+                            <FieldPlanPreview
+                              plan={refinedPlans[idx]}
+                              mode={state.mode}
+                            />
+                          )}
                         </div>
                         <label className="flex items-center gap-1 text-xs text-gray-600 cursor-pointer shrink-0">
                           <input
@@ -2398,4 +2598,70 @@ function RowSourcePreview({ row }) {
     );
   }
   return null;
+}
+
+// Shared component used by both import modals to show what fields
+// Claude proposes setting on the matched item. Renders only the keys
+// with a non-null value so the user can scan quickly.
+function FieldPlanPreview({ plan, mode }) {
+  // Friendly labels for fields the modal may render.
+  const LABELS = {
+    title: 'Title',
+    center_text: 'Center text',
+    right_text: 'Right text',
+    is_starred: 'Stand if able',
+    inline_body: 'Inline body',
+    expanded_detail: 'Expanded detail',
+    hymnal_source: 'Hymnal',
+    hymn_number: 'Hymn #',
+    hymn_title: 'Hymn title',
+    tune_name: 'Tune',
+    hymn_bio: 'Hymn bio',
+    scripture_reference: 'Scripture ref',
+    scripture_translation: 'Translation',
+    scripture_text: 'Scripture text',
+  };
+  const order = [
+    'title', 'center_text', 'right_text', 'is_starred',
+    'inline_body', 'expanded_detail',
+    'hymnal_source', 'hymn_number', 'hymn_title', 'tune_name', 'hymn_bio',
+    'scripture_reference', 'scripture_translation', 'scripture_text',
+  ];
+  const entries = order
+    .filter((k) => k in plan && plan[k] != null && plan[k] !== '')
+    .map((k) => [k, plan[k]]);
+  if (entries.length === 0) return null;
+  return (
+    <details className="mt-2 border border-green-200 rounded bg-green-50/40">
+      <summary className="text-xs text-green-800 cursor-pointer px-2 py-1 font-medium">
+        ✨ Fields Claude will set ({entries.length})
+      </summary>
+      <dl className="text-[11px] text-gray-800 px-2 py-2 space-y-1">
+        {entries.map(([key, value]) => (
+          <div key={key} className="flex gap-2">
+            <dt className="font-mono text-gray-500 shrink-0 w-28 truncate">
+              {LABELS[key] || key}
+              {key === 'expanded_detail' && mode === 'append' && (
+                <span className="text-amber-700 ml-1">+</span>
+              )}
+            </dt>
+            <dd className="flex-1 min-w-0">
+              {key === 'is_starred' ? (
+                <span className="font-mono">{value ? 'true' : 'false'}</span>
+              ) : (
+                <span className="whitespace-pre-wrap break-words line-clamp-3">
+                  {String(value)}
+                </span>
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {mode === 'append' && entries.some(([k]) => k === 'expanded_detail') && (
+        <p className="text-[10px] text-amber-800 px-2 pb-2">
+          ↳ Expanded detail will be appended to the item's existing text.
+        </p>
+      )}
+    </details>
+  );
 }
