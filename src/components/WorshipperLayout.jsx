@@ -1,9 +1,11 @@
 import { Outlet, Link } from 'react-router-dom';
 import VersionStamp from './VersionStamp.jsx';
+import ScrollRestoration from './ScrollRestoration.jsx';
 
 export default function WorshipperLayout() {
   return (
     <div className="min-h-screen flex flex-col bg-white">
+      <ScrollRestoration />
       <header className="bg-umc-900 text-white px-4 py-3 no-print">
         <div className="max-w-3xl mx-auto flex items-center justify-between">
           <Link to="/" className="font-serif text-lg leading-tight">

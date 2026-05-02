@@ -11,7 +11,13 @@ export default function AdminLogin() {
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const from = location.state?.from?.pathname || '/admin';
+  // Preserve the full original URL — pathname AND search/hash — so the
+  // user lands back exactly where they were (filters and all).
+  const fromLoc = location.state?.from;
+  const from =
+    (fromLoc?.pathname || '/admin') +
+    (fromLoc?.search || '') +
+    (fromLoc?.hash || '');
 
   // Already signed in? Bounce to admin (safely, in an effect).
   useEffect(() => {

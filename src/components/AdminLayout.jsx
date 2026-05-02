@@ -1,6 +1,7 @@
 import { Outlet, Link, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import VersionStamp from './VersionStamp.jsx';
+import ScrollRestoration from './ScrollRestoration.jsx';
 
 export default function AdminLayout() {
   const { profile, isPastor, signOut } = useAuth();
@@ -18,6 +19,7 @@ export default function AdminLayout() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <ScrollRestoration />
       <header className="bg-umc-900 text-white px-4 py-3">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-3">
           <Link to="/admin" className="font-serif text-lg">
