@@ -619,9 +619,8 @@ function GivingExpand({ funds, entries, settings }) {
             <tbody>
               {[
                 { key: 'received', label: 'Received' },
-                { key: 'expenses', label: 'Expenses' },
+                { key: 'expenses', label: 'Budgeted Expenses' },
                 { key: 'needed_to_meet_budget', label: 'Needed' },
-                { key: 'paid', label: 'Paid' },
               ].map(({ key, label }) => (
                 <tr key={key}>
                   <td className="pr-3 text-gray-700">{label}</td>
@@ -645,7 +644,6 @@ function GivingExpand({ funds, entries, settings }) {
             <thead>
               <tr className="text-gray-400">
                 <th></th>
-                <th className="text-right pl-3">MTD</th>
                 <th className="text-right pl-3">YTD</th>
               </tr>
             </thead>
@@ -653,9 +651,6 @@ function GivingExpand({ funds, entries, settings }) {
               {otherFunds.map((f) => (
                 <tr key={f.id}>
                   <td className="pr-3 text-gray-700">{f.name}</td>
-                  <td className="text-right pl-3 text-gray-800">
-                    {fmtMoney(findEntry(f.id, 'mtd')?.received)}
-                  </td>
                   <td className="text-right pl-3 text-gray-800">
                     {fmtMoney(findEntry(f.id, 'ytd')?.received)}
                   </td>
@@ -1540,9 +1535,8 @@ function StewardshipSection({
             <tbody>
               {[
                 { key: 'received', label: 'Received' },
-                { key: 'expenses', label: 'Expenses' },
+                { key: 'expenses', label: 'Budgeted Expenses' },
                 { key: 'needed_to_meet_budget', label: 'Needed' },
-                { key: 'paid', label: 'Paid' },
               ].map(({ key, label }) => (
                 <tr key={key} className="border-t border-gray-100">
                   <td className="py-1 text-gray-700">{label}</td>
@@ -1566,19 +1560,16 @@ function StewardshipSection({
             <thead>
               <tr className="text-xs uppercase tracking-wide text-gray-500">
                 <th>Fund</th>
-                <th className="text-right">MTD</th>
                 <th className="text-right">YTD</th>
               </tr>
             </thead>
             <tbody>
               {otherFunds.map((f) => {
-                const mtd = findEntry(f.id, 'mtd')?.received;
                 const ytd = findEntry(f.id, 'ytd')?.received;
-                if (!mtd && !ytd) return null;
+                if (!ytd) return null;
                 return (
                   <tr key={f.id} className="border-t border-gray-100">
                     <td className="py-1 text-gray-700">{f.name}</td>
-                    <td className="text-right text-gray-800">{fmtMoney(mtd)}</td>
                     <td className="text-right text-gray-800">{fmtMoney(ytd)}</td>
                   </tr>
                 );

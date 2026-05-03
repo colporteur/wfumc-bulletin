@@ -328,9 +328,8 @@ export default function StewardshipSection({ bulletin }) {
             <tbody>
               {[
                 { key: 'received', label: 'Received' },
-                { key: 'expenses', label: 'Expenses' },
+                { key: 'expenses', label: 'Budgeted Expenses' },
                 { key: 'needed_to_meet_budget', label: 'Needed to meet budget' },
-                { key: 'paid', label: 'Paid' },
               ].map(({ key, label }) => (
                 <tr key={key} className="border-t border-gray-100">
                   <td className="py-2 pr-4 text-gray-700">{label}</td>
@@ -376,7 +375,6 @@ export default function StewardshipSection({ bulletin }) {
             <thead>
               <tr className="text-xs uppercase tracking-wide text-gray-500">
                 <th className="text-left py-1 pr-4">Fund</th>
-                <th className="text-left py-1 pr-4">MTD</th>
                 <th className="text-left py-1">YTD</th>
               </tr>
             </thead>
@@ -384,19 +382,6 @@ export default function StewardshipSection({ bulletin }) {
               {otherFunds.map((f) => (
                 <tr key={f.id} className="border-t border-gray-100">
                   <td className="py-2 pr-4 text-gray-700">{f.name}</td>
-                  <td className="py-2 pr-4">
-                    <input
-                      type="number"
-                      step="0.01"
-                      className="input w-32"
-                      defaultValue={stewVal(f.id, 'mtd', 'received')}
-                      onBlur={(e) =>
-                        saveStewardship(f.id, 'mtd', {
-                          received: parseNum(e.target.value),
-                        })
-                      }
-                    />
-                  </td>
                   <td className="py-2">
                     <input
                       type="number"
