@@ -403,6 +403,7 @@ export default function LiturgySection({ bulletin }) {
       <SuggestionsPanel
         bulletin={bulletin}
         userId={user?.id}
+        liturgyItems={items}
         onItemAdded={load}
       />
 

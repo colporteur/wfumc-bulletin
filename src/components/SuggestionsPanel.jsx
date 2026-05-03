@@ -34,17 +34,6 @@ export default function SuggestionsPanel({
   const [busyId, setBusyId] = useState(null);
   const [smartAddSuggestion, setSmartAddSuggestion] = useState(null);
 
-  // Debug — log when liturgyItems count changes so we can trace the
-  // timing if the Smart Add button appears disabled despite a populated
-  // order of worship.
-  // eslint-disable-next-line no-console
-  console.debug(
-    '[SuggestionsPanel] render — liturgyItems.length =',
-    liturgyItems?.length,
-    'bulletin.id =',
-    bulletin?.id
-  );
-
   const reload = async () => {
     if (!bulletin?.id || !bulletin?.service_date) return;
     setLoading(true);
