@@ -4,6 +4,8 @@ import { useAuth } from '../contexts/AuthContext.jsx';
 import { supabase, withTimeout } from '../lib/supabase';
 import { prepareImageForUpload } from '../lib/imageHelpers';
 import HighlightShare from '../components/HighlightShare.jsx';
+import ManuscriptWithSlides from '../components/ManuscriptWithSlides.jsx';
+import { fetchSlideImagesForSermon } from '../lib/sermonSlideImages';
 
 const PRAYER_TEXT_LIMIT = 60;
 const RESPONSE_IMAGE_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -567,6 +569,22 @@ function ScriptureExpand({ item }) {
 
 function SermonExpand({ item }) {
   const s = item.sermon;
+  const [slideImages, setSlideImages] = useState([]);
+
+  // Lazily fetch slide images when this sermon section gets expanded.
+  // RLS allows public read for sermons in published bulletins, so this
+  // works for anonymous worshippers too.
+  useEffect(() => {
+    if (!s?.id) return;
+    let cancelled = false;
+    fetchSlideImagesForSermon(s.id).then((rows) => {
+      if (!cancelled) setSlideImages(rows || []);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [s?.id]);
+
   return (
     <div className="space-y-2">
       {s?.title && (
@@ -576,9 +594,11 @@ function SermonExpand({ item }) {
         <p className="text-xs text-gray-500">{s.scripture_reference}</p>
       )}
       {s?.manuscript_text ? (
-        <p className="text-gray-800 whitespace-pre-wrap font-serif">
-          {s.manuscript_text}
-        </p>
+        <ManuscriptWithSlides
+          text={s.manuscript_text}
+          slideImages={slideImages}
+          className="text-gray-800 font-serif"
+        />
       ) : (
         <p className="text-gray-500 italic">Manuscript not yet posted.</p>
       )}

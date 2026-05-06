@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { supabase, withTimeout } from '../lib/supabase';
 import LoadingSpinner from '../components/LoadingSpinner.jsx';
+import ManuscriptWithSlides from '../components/ManuscriptWithSlides.jsx';
+import { fetchSlideImagesForSermon } from '../lib/sermonSlideImages';
 
 function fmtDate(yyyymmdd) {
   if (!yyyymmdd) return '';
@@ -22,6 +24,7 @@ export default function SermonPage() {
   const [sermon, setSermon] = useState(null);
   // Bulletins (published) where this sermon was preached
   const [preachings, setPreachings] = useState([]);
+  const [slideImages, setSlideImages] = useState([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -29,7 +32,7 @@ export default function SermonPage() {
       setLoading(true);
       setError(null);
       try {
-        const [sermonRes, preachRes] = await Promise.all([
+        const [sermonRes, preachRes, slidesRes] = await Promise.all([
           withTimeout(
             supabase.from('sermons').select('*').eq('id', id).maybeSingle()
           ),
@@ -43,12 +46,14 @@ export default function SermonPage() {
               .eq('is_at_our_church', true)
               .order('preached_at', { ascending: false, nullsFirst: false })
           ),
+          fetchSlideImagesForSermon(id),
         ]);
         if (sermonRes.error) throw sermonRes.error;
         if (preachRes.error) throw preachRes.error;
         if (cancelled) return;
         setSermon(sermonRes.data);
         setPreachings(preachRes.data ?? []);
+        setSlideImages(slidesRes || []);
       } catch (e) {
         if (!cancelled) setError(e.message || String(e));
       } finally {
@@ -147,9 +152,12 @@ export default function SermonPage() {
       <div className="card">
         <h2 className="font-serif text-lg text-umc-900">Manuscript</h2>
         {sermon.manuscript_text ? (
-          <p className="mt-3 text-base text-gray-800 whitespace-pre-wrap font-serif leading-relaxed">
-            {sermon.manuscript_text}
-          </p>
+          <div className="mt-3">
+            <ManuscriptWithSlides
+              text={sermon.manuscript_text}
+              slideImages={slideImages}
+            />
+          </div>
         ) : (
           <p className="mt-3 text-sm text-gray-400 italic">
             No manuscript text posted for this sermon.
