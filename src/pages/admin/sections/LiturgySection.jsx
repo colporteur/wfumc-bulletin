@@ -11,6 +11,7 @@ import LoadingSpinner from '../../../components/LoadingSpinner.jsx';
 import SortableList, { DragHandle } from '../../../components/SortableList.jsx';
 import SuggestionsPanel from '../../../components/SuggestionsPanel.jsx';
 import { useAuth } from '../../../contexts/AuthContext.jsx';
+import { downloadPastorLiturgyDocx } from '../../../lib/exportPastorLiturgyDocx';
 
 // =====================================================================
 // Liturgy editor for a single bulletin's Order of Worship.
@@ -90,7 +91,7 @@ const DEFAULT_ITEMS = [
 ];
 
 export default function LiturgySection({ bulletin }) {
-  const { user } = useAuth();
+  const { user, isPastor } = useAuth();
   const bulletinId = bulletin?.id;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -100,6 +101,27 @@ export default function LiturgySection({ bulletin }) {
   const [seeding, setSeeding] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showMusicImport, setShowMusicImport] = useState(false);
+  const [printingPastor, setPrintingPastor] = useState(false);
+
+  // Count items the pastor has flagged for the at-the-pulpit liturgy
+  // sheet. Drives both the checkbox toolbar and the Print button label.
+  const pastorPrintCount = items.filter((i) => i.pastor_print_include).length;
+
+  const handlePrintPastorLiturgy = async () => {
+    if (!user?.id || !bulletinId) return;
+    setPrintingPastor(true);
+    setError(null);
+    try {
+      await downloadPastorLiturgyDocx({
+        userId: user.id,
+        bulletinId,
+      });
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setPrintingPastor(false);
+    }
+  };
 
   const load = async () => {
     if (!bulletinId) return;
@@ -389,6 +411,25 @@ export default function LiturgySection({ bulletin }) {
             >
               🎵 Import music
             </button>
+            {isPastor && (
+              <button
+                type="button"
+                onClick={handlePrintPastorLiturgy}
+                disabled={printingPastor || pastorPrintCount === 0}
+                className="btn-secondary text-sm whitespace-nowrap disabled:opacity-50"
+                title={
+                  pastorPrintCount === 0
+                    ? 'Check the box on each item you want to include in the Pastor’s Liturgy Sheet first.'
+                    : `Generate a Word doc with the ${pastorPrintCount} item${pastorPrintCount === 1 ? '' : 's'} you've flagged for the at-the-pulpit liturgy sheet.`
+                }
+              >
+                {printingPastor
+                  ? 'Building…'
+                  : `📋 Print Pastor's Liturgy Sheet${
+                      pastorPrintCount > 0 ? ` (${pastorPrintCount})` : ''
+                    }`}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -435,6 +476,7 @@ export default function LiturgySection({ bulletin }) {
               <LiturgyItemCard
                 item={it}
                 expanded={expandedId === it.id}
+                isPastor={isPastor}
                 onToggle={() =>
                   setExpandedId((x) => (x === it.id ? null : it.id))
                 }
@@ -505,6 +547,7 @@ export default function LiturgySection({ bulletin }) {
 function LiturgyItemCard({
   item,
   expanded,
+  isPastor,
   onToggle,
   onUpdate,
   onUpdateSermon,
@@ -521,6 +564,22 @@ function LiturgyItemCard({
       {/* Collapsed header — always visible */}
       <div className="flex items-center gap-1 px-2 py-2">
         <DragHandle handleProps={dragHandleProps} label="Drag to reorder" />
+        {isPastor && (
+          <label
+            className="flex items-center px-1 cursor-pointer"
+            title="Include this item in the Pastor's Liturgy Sheet"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <input
+              type="checkbox"
+              checked={!!item.pastor_print_include}
+              onChange={(e) =>
+                onUpdate({ pastor_print_include: e.target.checked })
+              }
+              className="h-4 w-4 rounded border-gray-300 text-umc-700 focus:ring-umc-700"
+            />
+          </label>
+        )}
         <button
           type="button"
           onClick={onToggle}

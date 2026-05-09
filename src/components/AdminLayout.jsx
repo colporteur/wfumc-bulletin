@@ -63,6 +63,9 @@ export default function AdminLayout() {
                 <NavLink to="/admin/settings" className={navClass}>
                   Settings
                 </NavLink>
+                <NavLink to="/admin/pastor-liturgy-prefs" className={navClass}>
+                  Pastor liturgy prefs
+                </NavLink>
               </>
             )}
           </nav>
