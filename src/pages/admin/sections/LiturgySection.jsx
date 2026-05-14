@@ -2122,6 +2122,61 @@ function LiturgyImportModal({ bulletin, items, onClose, onApplied }) {
 // stale values from last week. Hymn bios default to "append" because
 // expanded_detail often holds other commentary that shouldn't be lost.
 
+// Initial structured plan derived from a parsed row. Mirrors the
+// heuristic apply() behavior so every row has an editable plan from
+// the moment the file is parsed (the user doesn't have to wait for
+// "Refine with Claude" to get inline-editable target fields).
+function makeDefaultPlan(row) {
+  if (row.kind === 'music_item') {
+    return { inline_body: row.body || '' };
+  }
+  if (row.kind === 'hymn') {
+    return {
+      hymnal_source: row.hymnal_source || '',
+      hymn_number: row.hymn_number || '',
+      hymn_title: row.hymn_title || '',
+      tune_name: row.tune_name || '',
+    };
+  }
+  if (row.kind === 'hymn_bio') {
+    return {
+      hymn_bio: row.body || '',
+      expanded_detail: row.body || '',
+    };
+  }
+  return {};
+}
+
+// Which target fields are applicable to a given row kind. The order
+// matters — fields render in this order in the editor and the
+// "Add field…" picker offers any not-yet-set field from this list.
+const APPLICABLE_FIELDS = {
+  music_item: [
+    'title', 'center_text', 'right_text',
+    'inline_body', 'expanded_detail', 'is_starred',
+  ],
+  hymn: [
+    'hymnal_source', 'hymn_number', 'hymn_title', 'tune_name',
+    'title', 'center_text', 'right_text', 'is_starred',
+  ],
+  hymn_bio: [
+    'hymn_bio', 'expanded_detail',
+    'title', 'center_text', 'right_text',
+  ],
+};
+
+// Split a music-doc body into routable chunks. The music director
+// separates pieces with " – ", " — ", "," or ";" — break on those and
+// drop empty fragments. Each chunk becomes a one-click route into a
+// target field.
+function chunkBody(text) {
+  if (!text) return [];
+  return text
+    .split(/\s*[–—\-]\s+|[,;]\s+/)
+    .map((c) => c.trim())
+    .filter(Boolean);
+}
+
 function MusicImportModal({ bulletin, items, onClose, onApplied }) {
   const [phase, setPhase] = useState('pick'); // pick | preview | applying | done
   const [parsing, setParsing] = useState(false);
@@ -2132,6 +2187,9 @@ function MusicImportModal({ bulletin, items, onClose, onApplied }) {
   const [results, setResults] = useState(null);
   const [refinedPlans, setRefinedPlans] = useState({});
   const [refining, setRefining] = useState(false);
+  // Track whether Claude refinement has actually run (distinct from
+  // "plans exist" — heuristic defaults populate refinedPlans on parse).
+  const [refinedRowCount, setRefinedRowCount] = useState(0);
   const fileInputRef = useRef(null);
 
   const handleFile = async (e) => {
@@ -2151,6 +2209,7 @@ function MusicImportModal({ bulletin, items, onClose, onApplied }) {
       }
       const enriched = suggestMusicMatches(parsed.rows, items);
       const initial = {};
+      const initialPlans = {};
       enriched.forEach((row, idx) => {
         initial[idx] = {
           selectedItemId: row.suggestedItem?.id ?? '',
@@ -2158,9 +2217,14 @@ function MusicImportModal({ bulletin, items, onClose, onApplied }) {
           // bios default to append; everything else defaults to overwrite
           mode: row.kind === 'hymn_bio' ? 'append' : 'overwrite',
         };
+        // Pre-populate the editable field plan with heuristic defaults
+        // so the user can route content per-field without first having
+        // to ask Claude to refine.
+        initialPlans[idx] = makeDefaultPlan(row);
       });
       setRows(enriched);
       setRowState(initial);
+      setRefinedPlans(initialPlans);
       setPhase('preview');
     } catch (e2) {
       setError(e2.message || String(e2));
@@ -2172,6 +2236,28 @@ function MusicImportModal({ bulletin, items, onClose, onApplied }) {
 
   const updateRow = (idx, patch) => {
     setRowState((prev) => ({ ...prev, [idx]: { ...prev[idx], ...patch } }));
+  };
+
+  // Edit a single field of a row's plan. Empty-string values are kept
+  // (so the user can intentionally clear a field); the apply step
+  // treats null/empty as "do not update this DB column".
+  const updatePlanField = (idx, key, value) => {
+    setRefinedPlans((prev) => {
+      const cur = prev[idx] || {};
+      return { ...prev, [idx]: { ...cur, [key]: value } };
+    });
+  };
+  const removePlanField = (idx, key) => {
+    setRefinedPlans((prev) => {
+      const cur = { ...(prev[idx] || {}) };
+      delete cur[key];
+      return { ...prev, [idx]: cur };
+    });
+  };
+  // Restore a row's plan to the heuristic default (handy if the user
+  // edits a row into a corner and wants to start over).
+  const resetPlan = (idx) => {
+    setRefinedPlans((prev) => ({ ...prev, [idx]: makeDefaultPlan(rows[idx]) }));
   };
 
   const runRefine = async () => {
@@ -2201,11 +2287,19 @@ function MusicImportModal({ bulletin, items, onClose, onApplied }) {
     setError(null);
     try {
       const plans = await refineMusicRows(eligible);
-      const map = {};
-      for (const p of plans) {
-        if (typeof p.idx === 'number') map[p.idx] = p;
-      }
-      setRefinedPlans(map);
+      // Merge Claude's plans into the existing per-row defaults rather
+      // than replacing them — that way fields the user already edited
+      // (and that Claude didn't touch) survive the refine step.
+      setRefinedPlans((prev) => {
+        const next = { ...prev };
+        for (const p of plans) {
+          if (typeof p.idx !== 'number') continue;
+          const { idx, ...fields } = p;
+          next[idx] = { ...(next[idx] || {}), ...fields };
+        }
+        return next;
+      });
+      setRefinedRowCount(plans.length);
     } catch (e) {
       setError(e.message || String(e));
     } finally {
@@ -2230,14 +2324,26 @@ function MusicImportModal({ bulletin, items, onClose, onApplied }) {
         let appendedExpanded = null;
         const plan = refinedPlans[idx];
 
+        let appendedInline = null;
         if (plan) {
-          // Use Claude's plan for every field except expanded_detail —
-          // that one honors the row's append/overwrite mode.
+          // Use the (possibly user-edited) plan for every field. Two
+          // special cases honor the row's append/overwrite mode against
+          // existing item content:
+          //   - expanded_detail: append concatenates with existing
+          //   - inline_body:     same, for music items the user may
+          //                      want to keep notes already on the item
+          // Empty strings are skipped — that's how the editor signals
+          // "don't touch this DB column" (vs. an explicit removal that
+          // also skips, since removed keys are missing from the plan).
           for (const [key, value] of Object.entries(plan)) {
             if (key === 'idx') continue;
+            if (value === '' || value == null) continue;
             if (key === 'expanded_detail') {
-              if (state.mode === 'append' && value) appendedExpanded = value;
-              else update.expanded_detail = value || null;
+              if (state.mode === 'append') appendedExpanded = value;
+              else update.expanded_detail = value;
+            } else if (key === 'inline_body' && row.kind === 'music_item') {
+              if (state.mode === 'append') appendedInline = value;
+              else update.inline_body = value;
             } else {
               update[key] = value;
             }
@@ -2267,7 +2373,7 @@ function MusicImportModal({ bulletin, items, onClose, onApplied }) {
         const heuristicMusicAppend =
           !plan && row.kind === 'music_item' && state.mode === 'append' && row.body;
 
-        if (appendedExpanded || heuristicMusicAppend) {
+        if (appendedExpanded || appendedInline || heuristicMusicAppend) {
           const { data: cur, error: getErr } = await withTimeout(
             supabase
               .from('liturgy_items')
@@ -2281,6 +2387,12 @@ function MusicImportModal({ bulletin, items, onClose, onApplied }) {
             update.expanded_detail = existing
               ? `${existing}\n\n${appendedExpanded}`.trim()
               : appendedExpanded;
+          }
+          if (appendedInline) {
+            const existing = (cur?.inline_body || '').trim();
+            update.inline_body = existing
+              ? `${existing}\n\n${appendedInline}`.trim()
+              : appendedInline;
           }
           if (heuristicMusicAppend) {
             const existing = (cur?.inline_body || '').trim();
@@ -2387,17 +2499,16 @@ function MusicImportModal({ bulletin, items, onClose, onApplied }) {
                 >
                   {refining
                     ? 'Refining…'
-                    : Object.keys(refinedPlans).length > 0
+                    : refinedRowCount > 0
                       ? '✨ Re-refine with Claude'
                       : '✨ Refine with Claude'}
                 </button>
               </div>
-              {Object.keys(refinedPlans).length > 0 && (
+              {refinedRowCount > 0 && (
                 <p className="text-[10px] text-green-700 bg-green-50 border border-green-200 rounded px-2 py-1">
                   Claude proposed field-level plans for{' '}
-                  {Object.keys(refinedPlans).length} row
-                  {Object.keys(refinedPlans).length === 1 ? '' : 's'}. Review
-                  per-row, then apply.
+                  {refinedRowCount} row{refinedRowCount === 1 ? '' : 's'}.
+                  Review and edit per-row, then apply.
                 </p>
               )}
 
@@ -2490,10 +2601,14 @@ function MusicImportModal({ bulletin, items, onClose, onApplied }) {
                             </summary>
                             <RowSourcePreview row={row} />
                           </details>
-                          {refinedPlans[idx] && (
-                            <FieldPlanPreview
-                              plan={refinedPlans[idx]}
+                          {!state.skip && (
+                            <FieldPlanEditor
+                              row={row}
+                              plan={refinedPlans[idx] || {}}
                               mode={state.mode}
+                              onChange={(key, value) => updatePlanField(idx, key, value)}
+                              onRemove={(key) => removePlanField(idx, key)}
+                              onReset={() => resetPlan(idx)}
                             />
                           )}
                         </div>
@@ -2666,6 +2781,227 @@ function RowSourcePreview({ row }) {
     );
   }
   return null;
+}
+
+// Editable field-plan UI for the music importer. Combines:
+//   - a "chunks" row that splits the source body at separators and
+//     offers one-click routing of each chunk to a target field
+//   - an inline editor for every field in the plan, with per-field
+//     remove buttons and an "Add field…" picker for unused fields
+//
+// The plan uses the same shape as the read-only FieldPlanPreview that
+// powers the LITURGY importer below — keys are liturgy_items columns,
+// and apply() consumes whatever's set (skipping empty strings).
+function FieldPlanEditor({ row, plan, mode, onChange, onRemove, onReset }) {
+  const applicable = APPLICABLE_FIELDS[row.kind] || [];
+  // Keep field order stable: applicable order first, then any extras
+  // Claude refinement may have added (e.g., is_starred for hymns).
+  const present = [
+    ...applicable.filter((k) => k in plan),
+    ...Object.keys(plan).filter(
+      (k) => k !== 'idx' && !applicable.includes(k)
+    ),
+  ];
+  const missing = applicable.filter((k) => !(k in plan));
+
+  // Source text for the chunk picker — same content we render in the
+  // collapsed source preview, just split at separators.
+  const sourceText =
+    row.kind === 'music_item'
+      ? row.body
+      : row.kind === 'hymn_bio'
+        ? row.body
+        : '';
+  const chunks = chunkBody(sourceText);
+
+  // Available targets for the chunk picker. Booleans (is_starred) and
+  // hymn_number aren't useful as text routing targets, so omit them.
+  const CHUNK_TARGETS = applicable.filter(
+    (k) => k !== 'is_starred' && k !== 'hymn_number'
+  );
+
+  return (
+    <div className="mt-2 border border-umc-200 rounded bg-umc-50/30">
+      <div className="flex items-center justify-between px-2 py-1 border-b border-umc-200/70">
+        <span className="text-[11px] font-medium text-umc-900">
+          Field plan ({present.length}/{applicable.length} set)
+        </span>
+        <button
+          type="button"
+          onClick={onReset}
+          className="text-[10px] text-gray-500 hover:text-gray-800 underline"
+          title="Reset this row's plan to the heuristic default"
+        >
+          ↺ reset
+        </button>
+      </div>
+
+      {/* Chunk picker — only useful when the source has multiple
+          comma/dash-separated chunks worth routing individually. */}
+      {chunks.length >= 2 && CHUNK_TARGETS.length > 0 && (
+        <div className="px-2 py-2 border-b border-umc-200/70 space-y-1.5">
+          <div className="text-[10px] uppercase tracking-wide text-gray-500">
+            Quick-route source chunks
+          </div>
+          {chunks.map((chunk, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <span className="text-[11px] flex-1 min-w-0 truncate font-mono bg-white/70 border border-gray-200 rounded px-1.5 py-0.5">
+                {chunk}
+              </span>
+              <select
+                className="text-[10px] border border-gray-300 rounded px-1 py-0.5"
+                value=""
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  onChange(e.target.value, chunk);
+                  e.target.value = '';
+                }}
+              >
+                <option value="">→ field…</option>
+                {CHUNK_TARGETS.map((k) => (
+                  <option key={k} value={k}>
+                    {FIELD_LABELS[k] || k}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Editable per-field rows. */}
+      <div className="px-2 py-2 space-y-1.5">
+        {present.map((key) => (
+          <FieldEditorRow
+            key={key}
+            fieldKey={key}
+            value={plan[key]}
+            mode={mode}
+            onChange={(v) => onChange(key, v)}
+            onRemove={() => onRemove(key)}
+          />
+        ))}
+
+        {missing.length > 0 && (
+          <div className="flex items-center gap-2 pt-1">
+            <select
+              className="text-[10px] border border-gray-300 rounded px-1 py-0.5"
+              value=""
+              onChange={(e) => {
+                if (!e.target.value) return;
+                onChange(e.target.value, '');
+                e.target.value = '';
+              }}
+            >
+              <option value="">+ Add field…</option>
+              {missing.map((k) => (
+                <option key={k} value={k}>
+                  {FIELD_LABELS[k] || k}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Friendly labels (shared between editor + the legacy preview).
+const FIELD_LABELS = {
+  title: 'Title',
+  center_text: 'Center text',
+  right_text: 'Right text',
+  is_starred: 'Stand if able',
+  inline_body: 'Inline body',
+  expanded_detail: 'Expanded detail',
+  hymnal_source: 'Hymnal',
+  hymn_number: 'Hymn #',
+  hymn_title: 'Hymn title',
+  tune_name: 'Tune',
+  hymn_bio: 'Hymn bio',
+  scripture_reference: 'Scripture ref',
+  scripture_translation: 'Translation',
+  scripture_text: 'Scripture text',
+};
+
+// Long-text fields get a textarea; everything else gets a one-line input.
+const LONG_FIELDS = new Set([
+  'inline_body',
+  'expanded_detail',
+  'hymn_bio',
+  'scripture_text',
+]);
+
+function FieldEditorRow({ fieldKey, value, mode, onChange, onRemove }) {
+  const label = FIELD_LABELS[fieldKey] || fieldKey;
+  const isLong = LONG_FIELDS.has(fieldKey);
+  const isBool = fieldKey === 'is_starred';
+  const isHymnalSource = fieldKey === 'hymnal_source';
+  const showAppendHint =
+    mode === 'append' &&
+    (fieldKey === 'expanded_detail' || fieldKey === 'inline_body');
+
+  return (
+    <div className="flex items-start gap-2">
+      <label
+        className="text-[10px] text-gray-600 shrink-0 w-24 pt-1 truncate"
+        title={fieldKey}
+      >
+        {label}
+        {showAppendHint && (
+          <span className="ml-1 text-amber-700" title="Append mode">
+            +
+          </span>
+        )}
+      </label>
+      <div className="flex-1 min-w-0">
+        {isBool ? (
+          <label className="flex items-center gap-1 text-[11px] text-gray-700">
+            <input
+              type="checkbox"
+              checked={value === true || value === 'true'}
+              onChange={(e) => onChange(e.target.checked)}
+              className="h-3 w-3"
+            />
+            <span>{value === true || value === 'true' ? 'Yes' : 'No'}</span>
+          </label>
+        ) : isHymnalSource ? (
+          <select
+            className="w-full text-[11px] border border-gray-300 rounded px-1 py-0.5"
+            value={value ?? ''}
+            onChange={(e) => onChange(e.target.value)}
+          >
+            <option value="">—</option>
+            <option value="UMH">UMH</option>
+            <option value="TFWS">TFWS</option>
+          </select>
+        ) : isLong ? (
+          <textarea
+            className="w-full text-[11px] border border-gray-300 rounded px-1 py-0.5 min-h-[2.25rem]"
+            value={value ?? ''}
+            onChange={(e) => onChange(e.target.value)}
+            rows={Math.min(6, Math.max(1, String(value ?? '').split('\n').length))}
+          />
+        ) : (
+          <input
+            type="text"
+            className="w-full text-[11px] border border-gray-300 rounded px-1 py-0.5"
+            value={value ?? ''}
+            onChange={(e) => onChange(e.target.value)}
+          />
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="text-gray-400 hover:text-red-700 text-xs leading-none px-1 pt-1"
+        title="Remove this field from the plan (don't update this column)"
+      >
+        ×
+      </button>
+    </div>
+  );
 }
 
 // Shared component used by both import modals to show what fields
