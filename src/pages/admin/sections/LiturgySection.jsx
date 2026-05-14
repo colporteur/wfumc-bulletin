@@ -1321,7 +1321,7 @@ function SermonFields({ sermon, onUpdate, onPickSermon }) {
         {!pickerOpen ? (
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-gray-600">
-              Re-preaching a sermon you've given before?
+              Select sermon
             </p>
             <button
               type="button"
