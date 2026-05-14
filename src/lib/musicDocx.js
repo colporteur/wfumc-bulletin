@@ -82,20 +82,33 @@ function parseHymnLine(line) {
   };
 }
 
-// Detect the "Type: content" lines at the top of the doc.
+// Detect the "Type <sep> content" lines at the top of the doc.
+// Separator can be a colon OR an ASCII/en/em dash — the music director
+// flips between these week to week ("Prelude: Foo" vs "Prelude - Foo"
+// vs "Prelude – Foo"). Tolerate optional whitespace on both sides.
 function parseMusicItem(line) {
-  const m = line.match(/^([A-Za-z][A-Za-z\s]+?):\s+(.+)$/);
+  const m = line.match(/^([A-Za-z][A-Za-z\s]+?)\s*[:\-–—]\s*(.+)$/);
   if (!m) return null;
   const label = m[1].trim();
   if (!MUSIC_LABELS.includes(normalize(label))) return null;
   // Squash multiple whitespace runs (the real doc uses tabs to push the
   // performer to the right margin — collapse them for readability).
   const body = m[2].replace(/\s{2,}/g, '   ').trim();
+  if (!body) return null;
   return { label, body };
 }
 
-function isHymnsHeader(line) {
-  return /^hymns?\s*:\s*$/i.test(line.trim());
+// Recognize the "Hymns:" header. Tolerate the first hymn being jammed
+// onto the same line with no break (the music director sometimes writes
+// "Hymns:UMH #155 ..." with no space, so we peel off the trailing
+// content and let the caller re-parse it as the first hymn line).
+//
+// Returns { rest } where rest is whatever followed the colon (possibly
+// empty), or null if the line is not a Hymns header.
+function parseHymnsHeader(line) {
+  const m = line.trim().match(/^Hymns?\s*[:\-–—]\s*(.*)$/i);
+  if (!m) return null;
+  return { rest: m[1].trim() };
 }
 
 // HYMN BIO….My Jesus, I Love Thee By Author (1846-1873)
@@ -160,8 +173,15 @@ export async function parseMusicDocx(file) {
     }
 
     // "Hymns:" header opens the hymn list block.
-    if (isHymnsHeader(line)) {
+    const hymnsHeader = parseHymnsHeader(line);
+    if (hymnsHeader) {
       inHymnsBlock = true;
+      // The first hymn is sometimes jammed onto the same line as the
+      // header ("Hymns:UMH #155 ..."). Peel it off and emit it.
+      if (hymnsHeader.rest) {
+        const hymn = parseHymnLine(hymnsHeader.rest);
+        if (hymn) rows.push({ kind: 'hymn', ...hymn });
+      }
       continue;
     }
 
