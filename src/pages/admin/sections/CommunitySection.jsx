@@ -18,7 +18,7 @@ const blockTypeLabel = (t) =>
 function defaultDataForType(t) {
   switch (t) {
     case 'result':
-      return { winner: '', winner_score: '', loser: '', loser_score: '' };
+      return { game_name: '', winner: '', winner_score: '', loser: '', loser_score: '' };
     case 'quote':
       return { text: '', author: '' };
     case 'table':
@@ -248,7 +248,18 @@ function BlockCard({ block, onUpdate, onRemove, dragHandleProps }) {
 function ResultEditor({ data, onChange }) {
   const update = (patch) => onChange({ ...data, ...patch });
   return (
-    <div className="grid grid-cols-2 gap-3">
+    <div className="space-y-3">
+      <div>
+        <label className="label">Game</label>
+        <input
+          type="text"
+          className="input"
+          defaultValue={data.game_name ?? ''}
+          onBlur={(e) => update({ game_name: e.target.value })}
+          placeholder="e.g., Bingo / Spades / Trivia / Wordle"
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
       <div>
         <label className="label">Winner</label>
         <input
@@ -288,6 +299,7 @@ function ResultEditor({ data, onChange }) {
           onBlur={(e) => update({ loser_score: e.target.value })}
           placeholder="14"
         />
+      </div>
       </div>
     </div>
   );

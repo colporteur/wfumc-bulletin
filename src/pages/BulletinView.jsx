@@ -1681,7 +1681,12 @@ function CommunitySection({ blocks }) {
 
 function ResultBlock({ data }) {
   return (
-    <div className="text-center">
+    <div className="text-center space-y-1">
+      {data.game_name && (
+        <div className="text-xs uppercase tracking-wide text-gray-500">
+          {data.game_name}
+        </div>
+      )}
       <div className="grid grid-cols-3 items-center text-sm">
         <div className="text-right text-gray-700 font-medium">
           {data.winner || '—'}
