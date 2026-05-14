@@ -1405,32 +1405,6 @@ function PrayerSubmitForm({ categories, onSubmitted }) {
         </select>
       </div>
 
-      <label className="flex items-center gap-2 cursor-pointer">
-        <input
-          type="checkbox"
-          checked={draft.is_anonymous}
-          onChange={(e) =>
-            setDraft({ ...draft, is_anonymous: e.target.checked })
-          }
-          className="h-4 w-4 rounded border-gray-300 text-umc-700"
-        />
-        <span className="text-sm text-gray-700">Submit anonymously</span>
-      </label>
-
-      <div>
-        <label className="label">Your name</label>
-        <input
-          type="text"
-          className="input"
-          value={draft.submitter_name}
-          onChange={(e) =>
-            setDraft({ ...draft, submitter_name: e.target.value })
-          }
-          disabled={draft.is_anonymous}
-          placeholder={draft.is_anonymous ? 'Anonymous' : 'e.g., Jane Smith'}
-        />
-      </div>
-
       <div>
         <label className="label">
           Praying For{' '}
@@ -1463,6 +1437,32 @@ function PrayerSubmitForm({ categories, onSubmitted }) {
           value={draft.situation}
           onChange={(e) => setDraft({ ...draft, situation: e.target.value })}
           placeholder="e.g., recovering from surgery"
+        />
+      </div>
+
+      <label className="flex items-center gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={draft.is_anonymous}
+          onChange={(e) =>
+            setDraft({ ...draft, is_anonymous: e.target.checked })
+          }
+          className="h-4 w-4 rounded border-gray-300 text-umc-700"
+        />
+        <span className="text-sm text-gray-700">Submit anonymously</span>
+      </label>
+
+      <div>
+        <label className="label">Your name</label>
+        <input
+          type="text"
+          className="input"
+          value={draft.submitter_name}
+          onChange={(e) =>
+            setDraft({ ...draft, submitter_name: e.target.value })
+          }
+          disabled={draft.is_anonymous}
+          placeholder={draft.is_anonymous ? 'Anonymous' : 'e.g., Jane Smith'}
         />
       </div>
 

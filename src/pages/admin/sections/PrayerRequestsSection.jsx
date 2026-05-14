@@ -292,33 +292,6 @@ export default function PrayerRequestsSection() {
           </div>
 
           <div>
-            <label className="label">Submitter name</label>
-            <input
-              type="text"
-              className="input"
-              value={draft.submitter_name}
-              onChange={(e) =>
-                setDraft({ ...draft, submitter_name: e.target.value })
-              }
-              disabled={draft.is_anonymous}
-              placeholder="e.g., Jane Smith — or leave blank"
-            />
-            <label className="flex items-center gap-2 mt-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={draft.is_anonymous}
-                onChange={(e) =>
-                  setDraft({ ...draft, is_anonymous: e.target.checked })
-                }
-                className="h-4 w-4 rounded border-gray-300 text-umc-700"
-              />
-              <span className="text-sm text-gray-600">
-                Submit anonymously (no name shown)
-              </span>
-            </label>
-          </div>
-
-          <div>
             <label className="label">
               Praying For{' '}
               <span className="text-xs text-gray-400 font-normal">
@@ -355,6 +328,33 @@ export default function PrayerRequestsSection() {
               }
               placeholder="e.g., recovering from surgery"
             />
+          </div>
+
+          <div>
+            <label className="label">Submitter name</label>
+            <input
+              type="text"
+              className="input"
+              value={draft.submitter_name}
+              onChange={(e) =>
+                setDraft({ ...draft, submitter_name: e.target.value })
+              }
+              disabled={draft.is_anonymous}
+              placeholder="e.g., Jane Smith — or leave blank"
+            />
+            <label className="flex items-center gap-2 mt-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={draft.is_anonymous}
+                onChange={(e) =>
+                  setDraft({ ...draft, is_anonymous: e.target.checked })
+                }
+                className="h-4 w-4 rounded border-gray-300 text-umc-700"
+              />
+              <span className="text-sm text-gray-600">
+                Submit anonymously (no name shown)
+              </span>
+            </label>
           </div>
 
           <div>
@@ -599,47 +599,22 @@ function PrayerRequestRow({
           </select>
         </div>
         <div>
-          <label className="label">Submitter name</label>
+          <label className="label">
+            Praying For{' '}
+            <span className="text-xs text-gray-400 font-normal">
+              ({editDraft.praying_for.length}/{PRAYER_TEXT_LIMIT})
+            </span>
+          </label>
           <input
             type="text"
             className="input"
-            value={editDraft.submitter_name}
+            maxLength={PRAYER_TEXT_LIMIT}
+            value={editDraft.praying_for}
             onChange={(e) =>
-              setEditDraft({ ...editDraft, submitter_name: e.target.value })
+              setEditDraft({ ...editDraft, praying_for: e.target.value })
             }
-            disabled={editDraft.is_anonymous}
-            placeholder={editDraft.is_anonymous ? 'Anonymous' : ''}
           />
-          <label className="flex items-center gap-2 mt-1 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={editDraft.is_anonymous}
-              onChange={(e) =>
-                setEditDraft({ ...editDraft, is_anonymous: e.target.checked })
-              }
-              className="h-4 w-4 rounded border-gray-300 text-umc-700"
-            />
-            <span className="text-xs text-gray-600">Anonymous</span>
-          </label>
         </div>
-      </div>
-
-      <div>
-        <label className="label">
-          Praying For{' '}
-          <span className="text-xs text-gray-400 font-normal">
-            ({editDraft.praying_for.length}/{PRAYER_TEXT_LIMIT})
-          </span>
-        </label>
-        <input
-          type="text"
-          className="input"
-          maxLength={PRAYER_TEXT_LIMIT}
-          value={editDraft.praying_for}
-          onChange={(e) =>
-            setEditDraft({ ...editDraft, praying_for: e.target.value })
-          }
-        />
       </div>
 
       <div>
@@ -658,6 +633,31 @@ function PrayerRequestRow({
             setEditDraft({ ...editDraft, situation: e.target.value })
           }
         />
+      </div>
+
+      <div>
+        <label className="label">Submitter name</label>
+        <input
+          type="text"
+          className="input"
+          value={editDraft.submitter_name}
+          onChange={(e) =>
+            setEditDraft({ ...editDraft, submitter_name: e.target.value })
+          }
+          disabled={editDraft.is_anonymous}
+          placeholder={editDraft.is_anonymous ? 'Anonymous' : ''}
+        />
+        <label className="flex items-center gap-2 mt-1 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={editDraft.is_anonymous}
+            onChange={(e) =>
+              setEditDraft({ ...editDraft, is_anonymous: e.target.checked })
+            }
+            className="h-4 w-4 rounded border-gray-300 text-umc-700"
+          />
+          <span className="text-xs text-gray-600">Anonymous</span>
+        </label>
       </div>
 
       <div>
