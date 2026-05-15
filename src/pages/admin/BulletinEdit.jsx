@@ -5,6 +5,7 @@ import LoadingSpinner from '../../components/LoadingSpinner.jsx';
 import { useAuth } from '../../contexts/AuthContext.jsx';
 import { canSeeBulletinSection } from '../../lib/permissions';
 import { syncBulletinFromWorshipPlan } from '../../lib/worshipPlanSync';
+import { downloadBulletinDocx } from '../../lib/exportBulletinDocx';
 
 import CoverSection from './sections/CoverSection.jsx';
 import WelcomeCalendarSection from './sections/WelcomeCalendarSection.jsx';
@@ -134,6 +135,28 @@ export default function BulletinEdit() {
     update({ status: 'published', published_at: new Date().toISOString() });
   const unpublish = () => update({ status: 'draft', published_at: null });
   const archive = () => update({ status: 'archived' });
+
+  // Generate the print-ready Word file. Available in any status — the
+  // pastor often wants to proof a printed copy before publishing.
+  const [downloading, setDownloading] = useState(false);
+  const [downloadInfo, setDownloadInfo] = useState(null);
+  const downloadPrintable = async () => {
+    if (!bulletin?.id) return;
+    setDownloading(true);
+    setError(null);
+    setDownloadInfo(null);
+    try {
+      const result = await downloadBulletinDocx({ bulletinId: bulletin.id });
+      setDownloadInfo({
+        pages: result.estimatedPages,
+        target: 8,
+      });
+    } catch (e) {
+      setError(`Print download failed: ${e.message || String(e)}`);
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   // Delete a draft bulletin entirely. Gated to draft status so a
   // published bulletin (which worshippers might be reading) can't be
@@ -265,6 +288,14 @@ export default function BulletinEdit() {
           >
             ↻ From worship plan
           </button>
+          <button
+            onClick={downloadPrintable}
+            disabled={downloading}
+            className="btn-secondary disabled:opacity-50"
+            title="Download a print-ready Word file (8.5×7 booklet pages — enable Word's Book fold to print 2-up duplex on legal paper)"
+          >
+            {downloading ? 'Generating…' : '📄 Download print-ready Word'}
+          </button>
           {bulletin.status === 'draft' && (
             <>
               <button
@@ -317,6 +348,23 @@ export default function BulletinEdit() {
       {error && (
         <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
           {error}
+        </p>
+      )}
+
+      {downloadInfo && (
+        <p
+          className={`text-sm rounded px-3 py-2 border ${
+            downloadInfo.pages > downloadInfo.target
+              ? 'text-amber-800 bg-amber-50 border-amber-200'
+              : 'text-green-800 bg-green-50 border-green-200'
+          }`}
+        >
+          ✓ Downloaded — estimated{' '}
+          <strong>~{downloadInfo.pages} page{downloadInfo.pages === 1 ? '' : 's'}</strong>
+          {downloadInfo.pages > downloadInfo.target
+            ? ` (over your ${downloadInfo.target}-page target by ${downloadInfo.pages - downloadInfo.target})`
+            : ` (target ${downloadInfo.target}; sermon-notes filler added)`}
+          . Verify the actual page count in Word — this is a rough estimate.
         </p>
       )}
 
