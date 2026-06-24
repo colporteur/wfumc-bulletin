@@ -368,9 +368,32 @@ function UserRow({ profile, isSelf, onChanged, onError }) {
           </select>
         </td>
         <td className="px-3 py-2 hidden md:table-cell">
-          <code className="text-[10px] text-gray-500">
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(profile.user_id);
+                // Tiny inline confirmation — re-uses the existing
+                // title attribute by swapping it for ~1.5s.
+                const el = document.activeElement;
+                if (el && el.title) {
+                  const orig = el.title;
+                  el.title = 'Copied!';
+                  setTimeout(() => {
+                    el.title = orig;
+                  }, 1500);
+                }
+              } catch {
+                // Clipboard API can fail on insecure contexts —
+                // fall back to a prompt the user can copy from.
+                window.prompt('Full user ID:', profile.user_id);
+              }
+            }}
+            title={`${profile.user_id} (click to copy)`}
+            className="text-[10px] text-gray-500 hover:text-umc-900 font-mono"
+          >
             {profile.user_id.slice(0, 8)}…
-          </code>
+          </button>
         </td>
         <td className="px-3 py-2 text-right">
           <button
