@@ -147,6 +147,7 @@ Deno.serve(async (req: Request) => {
           proposed_destinations: s.proposed_destinations,
           mentioned_names: s.mentioned_names,
           rationale: s.rationale || null,
+          suggested_sunday_hint: s.suggested_sunday_hint,
           sort_order: totalSegments + j,
         }));
         const { error: insErr } = await admin
@@ -226,6 +227,7 @@ interface ExtractedSegment {
   proposed_destinations: string[];
   mentioned_names: string[];
   rationale: string;
+  suggested_sunday_hint: string | null;
 }
 
 async function callClaudeForSegments(
@@ -263,7 +265,16 @@ async function callClaudeForSegments(
   if (!parsed || !Array.isArray(parsed.segments)) {
     throw new Error('Claude did not return a segments[] array.');
   }
-  const VALID = new Set(['pastoral_interaction', 'pastoral_note', 'sermon_resource']);
+  // Keep in sync with the client's normalizer in
+  // WFUMC Daily Capture App/src/lib/claude.js — both need to accept the
+  // full canonical destination set or webhook captures will lose the
+  // fourth bucket ('worship_admin_note') on their way into the DB.
+  const VALID = new Set([
+    'pastoral_interaction',
+    'pastoral_note',
+    'sermon_resource',
+    'worship_admin_note',
+  ]);
   return parsed.segments
     .filter(
       (s: unknown) =>
@@ -290,6 +301,11 @@ async function callClaudeForSegments(
             .filter(Boolean)
         : [],
       rationale: typeof s.rationale === 'string' ? s.rationale.trim() : '',
+      suggested_sunday_hint:
+        typeof s.suggested_sunday_hint === 'string' &&
+        s.suggested_sunday_hint.trim()
+          ? s.suggested_sunday_hint.trim()
+          : null,
     }))
     .filter((s: ExtractedSegment) => s.excerpt.length > 0);
 }
@@ -435,12 +451,20 @@ const SCHEMA_DESCRIPTION =
   '          voice — e.g. "Visited Mrs. Johnson; she was worried\n' +
   "          about her grandson's job\"),\n" +
   '      "proposed_destinations": array of one or more strings from:\n' +
-  '          "pastoral_interaction", "pastoral_note", "sermon_resource",\n' +
+  '          "pastoral_interaction", "pastoral_note",\n' +
+  '          "sermon_resource", "worship_admin_note",\n' +
   '      "mentioned_names": array of strings (people referenced by\n' +
   '          name — full names if used, otherwise as said),\n' +
   '      "rationale": string (one short sentence explaining why you\n' +
   '          classified it this way; cite a phrase from the segment\n' +
-  '          if helpful)\n' +
+  '          if helpful),\n' +
+  '      "suggested_sunday_hint": string OR null. ONLY set for\n' +
+  '          worship_admin_note segments AND ONLY when the segment\n' +
+  '          clearly mentions a specific date, event name, or\n' +
+  '          liturgical occasion tied to one or more upcoming\n' +
+  '          Sundays (e.g. "Palm Sunday", "December 15",\n' +
+  '          "VBS closing Sunday", "Advent 3"). If the admin item\n' +
+  '          is generic / undated / ongoing, use null.\n' +
   '    },\n' +
   '    ...\n' +
   '  ]\n' +
@@ -459,6 +483,22 @@ const DESTINATION_RULES =
   '  real-life parallel that could be drawn on in a future sermon.\n' +
   '  This is the only destination that has nothing to do with a\n' +
   '  specific parishioner — it lives in the sermon resource library.\n' +
+  '- worship_admin_note: an operational or planning matter about the\n' +
+  '  church — Sunday scheduling, program logistics, upcoming events\n' +
+  '  (VBS, Advent, potluck), worship mechanics, staff coordination,\n' +
+  '  calendar items, budget follow-ups. NOT about caring for a\n' +
+  '  specific parishioner and NOT sermon fodder. Choose this when the\n' +
+  '  segment is essentially "here is a to-do or decision that touches\n' +
+  '  church programming".\n' +
+  '\n' +
+  '  For admin-note segments, ALSO populate suggested_sunday_hint\n' +
+  '  when (and only when) the segment names a specific date, event,\n' +
+  '  or liturgical Sunday. Examples of good hints: "Palm Sunday",\n' +
+  '  "December 15", "VBS closing Sunday (mid-July)", "Advent 2".\n' +
+  '  If the item is generic ("we need to fix the choir loft mic")\n' +
+  '  or applies to any Sunday, leave the hint null. The pastor uses\n' +
+  '  the hint to jump to matching worship_plans in the attach picker;\n' +
+  '  guessing wildly is worse than leaving it null.\n' +
   '\n' +
   'A single segment MAY have multiple destinations. For example, the\n' +
   'pastor recounting a visit where the parishioner shared a story that\n' +
