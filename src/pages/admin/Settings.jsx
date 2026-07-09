@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase, withTimeout } from '../../lib/supabase';
 import LoadingSpinner from '../../components/LoadingSpinner.jsx';
 import { useAuth } from '../../contexts/AuthContext.jsx';
+import AiModelsCard from '../../components/AiModelsCard.jsx';
 
 const FIELDS = [
   { key: 'church_name', label: 'Church name', group: 'Church identity' },
@@ -40,6 +41,22 @@ const FIELDS = [
     group: 'AI Assist',
     type: 'password',
     helpText: 'Stored encrypted server-side. Never sent to the worshipper-facing app.',
+  },
+  {
+    key: 'openrouter_api_key',
+    label: 'OpenRouter API key (fallback for non-Anthropic models)',
+    group: 'AI Assist',
+    type: 'password',
+    helpText:
+      'Universal fallback: any registry model without a native key routes through OpenRouter. Server-side only, same as the Anthropic key.',
+  },
+  {
+    key: 'meta_api_key',
+    label: 'Meta Model API key (native — Muse Spark)',
+    group: 'AI Assist',
+    type: 'password',
+    helpText:
+      'Native key for api.meta.ai (Muse Spark is not on OpenRouter). When set, Meta-provider models route here in preference to OpenRouter.',
   },
 
   {
@@ -130,7 +147,8 @@ export default function Settings() {
   };
 
   return (
-    <form onSubmit={handleSave} className="space-y-6 max-w-3xl">
+    <div className="space-y-6 max-w-3xl">
+    <form onSubmit={handleSave} className="space-y-6">
       <div>
         <h1 className="text-2xl font-serif text-umc-900">Church Settings</h1>
         <p className="text-sm text-gray-600 mt-1">
@@ -208,5 +226,10 @@ export default function Settings() {
         )}
       </div>
     </form>
+
+    {/* Shared AI model registry — outside the settings form because it
+        manages its own table (ai_models) with its own save actions. */}
+    <AiModelsCard />
+    </div>
   );
 }
